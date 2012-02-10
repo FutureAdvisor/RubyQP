@@ -4,7 +4,7 @@ require 'rake/clean'
 
 EXT_CONF = 'ext/extconf.rb'
 MAKEFILE = 'ext/Makefile'
-MODULE = 'ext/rubyqp.so'
+MODULE = 'ext/ruby_qp.so'
 SRC = Dir.glob('ext/*.c')
 SRC << MAKEFILE
 
@@ -19,13 +19,16 @@ PKG_FILES = FileList[
 spec = Gem::Specification.new do |s|
   s.platform = Gem::Platform::RUBY
   s.summary = "Ruby wrapper for the cqp library."
-  s.name = "rubyqp"
+  s.name = "ruby_qp"
   s.version = "0.0.1"
   s.requirements << 'GSL (GNU Scientific Library)'
   s.require_paths << 'ext'
   s.extensions = "ext/extconf.rb"
   s.files = PKG_FILES
   s.description = "ruby wrapper for the cqp library"
+  s.author = "Joshua Tokle"
+  s.email = "josh@futureadvisor.com"
+  s.homepage = "http://www.futureadvisor.com"
 end
 
 file MAKEFILE => EXT_CONF do |t|

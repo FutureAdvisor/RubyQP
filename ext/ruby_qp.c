@@ -12,7 +12,7 @@
 #define QP_MATRIX_NROW RARRAY_LEN
 #define QP_MATRIX_NCOL(VALUE) RARRAY_LEN(rb_ary_entry(VALUE,0))
 
-VALUE QP = Qnil;
+VALUE RubyQp = Qnil;
 
 // Raise a ruby Exception if ary can't be interpreted as a GSL vector.
 // 
@@ -369,10 +369,10 @@ qp_solve_dist(int argc, VALUE *argv, VALUE self) {
   return rb_hash_aref(qp_result, rb_str_new2("solution"));
 }
 
-void Init_rubyqp(void) {
-  QP = rb_define_module("QP");
-  rb_define_module_function(QP, "solve_full", qp_solve_full, 6);
-  rb_define_module_function(QP, "solve", qp_solve, 6);
-  rb_define_module_function(QP, "solve_dist_full", qp_solve_dist_full, -1);
-  rb_define_module_function(QP, "solve_dist", qp_solve_dist, -1);
+void Init_ruby_qp(void) {
+  RubyQp = rb_define_module("RubyQp");
+  rb_define_module_function(RubyQp, "solve_full", qp_solve_full, 6);
+  rb_define_module_function(RubyQp, "solve", qp_solve, 6);
+  rb_define_module_function(RubyQp, "solve_dist_full", qp_solve_dist_full, -1);
+  rb_define_module_function(RubyQp, "solve_dist", qp_solve_dist, -1);
 }
