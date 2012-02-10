@@ -17,7 +17,7 @@ PKG_FILES = FileList[
 
 SPEC = Gem::Specification.new do |s|
     s.name = "rubyqp"
-    s.version = "0.0"
+    s.version = "0.0.1"
     s.email = "josh@futureadvisor.com"
     s.homepage = "http://futureadvisor.com/"
     s.summary = "ruby wrapper for the cqp library"
