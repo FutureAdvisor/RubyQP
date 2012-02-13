@@ -18,16 +18,15 @@ VALUE RubyQp = Qnil;
 // 
 void
 qp_ensure_vector(const VALUE ary) {
-  int i, type;
+  int i;
 
   // A vector argument must be a ruby Array
   Check_Type(ary, T_ARRAY);
 
   // All entries in the Array must be Floats or Fixnums
   for (i = 0; i < RARRAY_LEN(ary); i++) {
-    type = TYPE(rb_ary_entry(ary, i));
-    if (!(type == T_FLOAT || type == T_FIXNUM)) {
-      rb_raise(rb_eArgError, "Vector entries must be Float or Fixnum.");
+    if (rb_obj_is_kind_of(rb_ary_entry(ary, i), rb_cNumeric) == Qfalse) {
+      rb_raise(rb_eArgError, "Vector entries must be Numeric.");
     }
   }
 }
@@ -36,7 +35,7 @@ qp_ensure_vector(const VALUE ary) {
 //
 void
 qp_ensure_matrix(const VALUE ary) {
-  int i, j, nrow, ncol, type;
+  int i, j, nrow, ncol;
 
   // A matrix argument must be a ruby Array
   Check_Type(ary, T_ARRAY);
@@ -58,9 +57,8 @@ qp_ensure_matrix(const VALUE ary) {
       rb_raise(rb_eArgError, "Matrix array has rows of different lengths.");
     }
     for (j = 1; j < ncol; j++) {
-      type = TYPE(QP_MATRIX_ENTRY(ary, i, j));
-      if (!(type == T_FLOAT || type == T_FIXNUM)) {
-        rb_raise(rb_eArgError, "Matrix entries must be Float or Fixnum.");
+      if (rb_obj_is_kind_of(QP_MATRIX_ENTRY(ary, i, j), rb_cNumeric) == Qfalse) {
+        rb_raise(rb_eArgError, "Matrix entries must be Numeric.");
       }
     }
   }
