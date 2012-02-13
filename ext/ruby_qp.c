@@ -45,7 +45,7 @@ qp_ensure_matrix(const VALUE ary) {
   nrow = RARRAY_LEN(ary);
   if (nrow == 0) return;
 
-  // Make sure the first value in ary is an Array and grab it's length
+  // Make sure the first value in ary is an Array and grab its length
   Check_Type(rb_ary_entry(ary, 0), T_ARRAY);
   ncol = QP_MATRIX_NCOL(ary);
 
@@ -187,11 +187,26 @@ qp_call_cqp(gsl_matrix *Qmat, gsl_vector *qvec, gsl_matrix *Amat, gsl_vector *bv
   return result;
 }
 
-// Minimize the expression
+// :call-seq:
+//   RubyQp::solve_full(q_mat, q_vec, a_mat, b_vec, c_mat, d_vec) => hash
+//
+// Find +x+ which minimizes the expression
 //   (1/2)(x^t)Qx + (q^t)x
 // subject to the constraints
 //   Ax = b 
-//   Cx >= d
+//   Cx >= d,
+// where +Q+ is the matrix specified by _q_mat_, +q+ is the vector specified by _q_vec_, 
+// and so forth for +A+, +b+, +C+, and +d+. _q_mat_ (and all matrix arguments) should be 
+// an Array of Arrays. Sub-Arrays should all have the same length, and their entries must 
+// be Numeric. _q_vec_ (and all vector arguments) should be an Array of Numerics. 
+//
+// The constraint +Cx = d+ means that each entry in the vector +Cx+ is greater than or
+// equal to the corresponding entry in the vector +d+.
+//
+// *Warning*: It's up to the caller to ensure that the argument dimensions and 
+// constraints are consistent. If not, then the method call will fail, leaving unfreed 
+// memory.
+//
 // Returns a ruby Hash with the following keys and values set:
 //   "solution"      => minimizing solution
 //   "lagrange_eq"   => Lagrange multipliers corresponding to Ax = b
@@ -199,8 +214,6 @@ qp_call_cqp(gsl_matrix *Qmat, gsl_vector *qvec, gsl_matrix *Amat, gsl_vector *bv
 //   "iterations"    => number of iterations to find the solution
 //   "status"        => final status (GSL_SUCCESS or GSL_CONTINUE if maximum number of 
 //                      iterations was reached)
-//
-// TODO: this can still fail if the constraints are inconsistent
 //
 VALUE
 qp_solve_full(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary, 
@@ -249,7 +262,10 @@ qp_solve_full(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
   return qp_result;
 }
 
-// Same as qp_solve_full, but returns only the solution vector as a ruby Array.
+// :call-seq: 
+//   RubyQp::solve(q_mat, q_vec, a_mat, b_vec, c_mat, d_vec) => array
+//
+// Same as RubyQp::solve_full, but returns only the solution vector as a ruby Array.
 //
 VALUE
 qp_solve(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary, 
@@ -259,11 +275,31 @@ qp_solve(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
   return rb_hash_aref(qp_result, rb_str_new2("solution"));
 }
 
-// Minimize the expression
+// :call-seq:
+//   RubyQp::solve_dist_full(m_mat, m_vec, a_mat, b_vec, c_mat, d_vec, w_vec = nil) => hash
+//
+// Find x which minimizes the expression
 //   ||Mx - m||
 // subject to the constraints
 //   Ax = b 
-//   Cx >= d
+//   Cx >= d,
+// where +M+ is the matrix specified by _m_mat_, +m+ is the vector specified by _m_vec_, 
+// and so forth for +A+, +b+, +C+, and +d+. _m_mat_ (and all matrix arguments) should be 
+// an Array of Arrays. Sub-Arrays should all have the same length, and their entries must 
+// be Numeric. _m_vec_ (and all vector arguments) should be an Array of Numerics. 
+//
+// The constraint +Cx = d+ means that each entry in the vector +Cx+ is greater than or
+// equal to the corresponding entry in the vector +d+.
+//
+// The norm +||.||+ is a weighted vector norm with weights given by a vector +w+ (an 
+// optional argument specified by _w_vec_). A larger number in the ith entry of _w_vec_
+// means that the ith coordinate will have a greater effect on the distance computed by
+// the norm. If _w_vec_ is not given, then +||.||+ is just the standard Euclidean norm.
+//
+// *Warning*: It's up to the caller to ensure that the argument dimensions and 
+// constraints are consistent. If not, then the method call will fail, leaving unfreed 
+// memory.
+//
 // Returns a ruby Hash with the following keys and values set:
 //   "solution"      => minimizing solution
 //   "lagrange_eq"   => Lagrange multipliers corresponding to Ax = b
@@ -271,8 +307,6 @@ qp_solve(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
 //   "iterations"    => number of iterations to find the solution
 //   "status"        => final status (GSL_SUCCESS or GSL_CONTINUE if maximum number of 
 //                      iterations was reached)
-//
-// TODO: this can still fail if the constraints are inconsistent
 //
 VALUE
 qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
@@ -361,7 +395,10 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
   return qp_result;
 }
 
-// Same as qp_solve_dist_full, but returns only the solution vector as a ruby Array.
+// :call-seq:
+//   RubyQp::solve_dist(m_mat, m_vec, a_mat, b_vec, c_mat, d_vec, w_vec = nil) => array
+//
+// Same as RubyQp::solve_dist_full, but returns only the solution vector as a ruby Array.
 //
 VALUE
 qp_solve_dist(int argc, VALUE *argv, VALUE self) {
