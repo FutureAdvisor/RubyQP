@@ -2,6 +2,7 @@
 #include <gsl/gsl_vector.h>
 #include <gsl/gsl_matrix.h>
 #include <gsl/gsl_blas.h>
+#include <gsl/gsl_errno.h>
 #include "gsl_cqp.h"
 
 #define QP_MAX_ITER 1000
@@ -132,6 +133,31 @@ qp_matrix_to_ary(const gsl_matrix *mat) {
   return ary;
 }
 
+// Return a ruby exception class appropriate to the GSL error code. 
+//
+VALUE
+qp_error_class_for(int status) {
+  VALUE error_class;
+
+  switch(status) {
+    case GSL_EBADLEN:
+    case GSL_EDOM:
+    case GSL_EINVAL:
+      error_class = rb_eArgError;
+      break;
+    case GSL_ERANGE:
+      error_class = rb_eRangeError;
+      break;
+    case GSL_ENOMEM:
+      error_class = rb_eNoMemError;
+      break;
+    default:
+      error_class = rb_eException;
+  }
+
+  return error_class;
+}
+
 // Call the quadratic programming routine on the arguments. The calling function should
 // check that the parameters are consistent. Failure to do so may result in an error and
 // leave memory unfreed. Returns a ruby Hash with the following keys and values set:
@@ -142,8 +168,9 @@ qp_matrix_to_ary(const gsl_matrix *mat) {
 //   "status"        => final status (GSL_SUCCESS or GSL_CONTINUE if maximum number of 
 //                      iterations was reached)
 //
-VALUE
-qp_call_cqp(gsl_matrix *Qmat, gsl_vector *qvec, gsl_matrix *Amat, gsl_vector *bvec, 
+int
+qp_call_cqp(VALUE *qp_result, gsl_matrix *Qmat, gsl_vector *qvec, 
+            gsl_matrix *Amat, gsl_vector *bvec, 
             gsl_matrix *Cmat, gsl_vector *dvec) 
 {
   gsl_cqp_data *cqp_data;
@@ -151,7 +178,6 @@ qp_call_cqp(gsl_matrix *Qmat, gsl_vector *qvec, gsl_matrix *Amat, gsl_vector *bv
   int status;
   const gsl_cqpminimizer_type *T;
   gsl_cqpminimizer *s;
-  VALUE result;
 
   cqp_data = malloc(sizeof(gsl_cqp_data));
   cqp_data->Q = Qmat;
@@ -172,17 +198,17 @@ qp_call_cqp(gsl_matrix *Qmat, gsl_vector *qvec, gsl_matrix *Amat, gsl_vector *bv
     status = gsl_cqpminimizer_test_convergence(s, QP_EPS_GAP, QP_EPS_RESIDUALS);
   } while (status == GSL_CONTINUE && iter <= QP_MAX_ITER);
 
-  result = rb_hash_new();
-  rb_hash_aset(result, rb_str_new2("solution"), qp_vector_to_ary(gsl_cqpminimizer_x(s)));
-  rb_hash_aset(result, rb_str_new2("lagrange_eq"), qp_vector_to_ary(gsl_cqpminimizer_lm_eq(s)));
-  rb_hash_aset(result, rb_str_new2("lagrange_ineq"), qp_vector_to_ary(gsl_cqpminimizer_lm_ineq(s)));
-  rb_hash_aset(result, rb_str_new2("iterations"), ULONG2NUM(iter));
-  rb_hash_aset(result, rb_str_new2("status"), INT2FIX(status));
+  *qp_result = rb_hash_new();
+  rb_hash_aset(*qp_result, rb_str_new2("solution"), qp_vector_to_ary(gsl_cqpminimizer_x(s)));
+  rb_hash_aset(*qp_result, rb_str_new2("lagrange_eq"), qp_vector_to_ary(gsl_cqpminimizer_lm_eq(s)));
+  rb_hash_aset(*qp_result, rb_str_new2("lagrange_ineq"), qp_vector_to_ary(gsl_cqpminimizer_lm_ineq(s)));
+  rb_hash_aset(*qp_result, rb_str_new2("iterations"), ULONG2NUM(iter));
+  rb_hash_aset(*qp_result, rb_str_new2("status"), INT2FIX(status));
 
   gsl_cqpminimizer_free(s);
   free(cqp_data);
 
-  return result;
+  return status;
 }
 
 // :call-seq:
@@ -218,7 +244,7 @@ qp_solve_full(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
               VALUE Cary, VALUE dary) 
 {
   // copy inputs into GSL matrix and vector types, initialize CQP data
-  int ncol;
+  int ncol, status;
   gsl_matrix *Qmat, *Amat, *Cmat;
   gsl_vector *qvec, *bvec, *dvec;
   VALUE qp_result;
@@ -248,7 +274,7 @@ qp_solve_full(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
   bvec = qp_ary_to_vector(bary);
   dvec = qp_ary_to_vector(dary);
 
-  qp_result = qp_call_cqp(Qmat, qvec, Amat, bvec, Cmat, dvec);
+  status = qp_call_cqp(&qp_result, Qmat, qvec, Amat, bvec, Cmat, dvec);
 
   gsl_matrix_free(Qmat);
   gsl_matrix_free(Amat);
@@ -256,6 +282,10 @@ qp_solve_full(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
   gsl_vector_free(qvec);
   gsl_vector_free(bvec);
   gsl_vector_free(dvec);
+
+  if (status) {
+    rb_raise(qp_error_class_for(status), gsl_strerror(status));
+  }
 
   return qp_result;
 }
@@ -311,7 +341,7 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
   VALUE Mary, mary, Aary, bary, Cary, dary, wary;
   gsl_matrix *Mmat, *Amat, *Cmat, *Wmat, *Qmat, *Tempmat;
   gsl_vector *mvec, *bvec, *dvec, *qvec, *tempvec;
-  int i, j, len;
+  int i, j, len, status;
   VALUE qp_result;
 
   rb_scan_args(argc, argv, "61", &Mary, &mary, &Aary, &bary, &Cary, &dary, &wary);
@@ -377,7 +407,7 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
   qvec = gsl_vector_alloc(Mmat->size2);
   gsl_blas_dgemv(CblasTrans, -1.0, Mmat, tempvec, 0.0, qvec);
 
-  qp_result = qp_call_cqp(Qmat, qvec, Amat, bvec, Cmat, dvec);
+  status = qp_call_cqp(&qp_result, Qmat, qvec, Amat, bvec, Cmat, dvec);
 
   gsl_matrix_free(Mmat);
   gsl_matrix_free(Amat);
@@ -389,6 +419,10 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
   gsl_vector_free(dvec);
   gsl_vector_free(tempvec);
   gsl_vector_free(qvec);
+
+  if (status) {
+    rb_raise(qp_error_class_for(status), gsl_strerror(status));
+  }
 
   return qp_result;
 }
@@ -410,4 +444,6 @@ void Init_ruby_qp(void) {
   rb_define_module_function(RubyQp, "solve", qp_solve, 6);
   rb_define_module_function(RubyQp, "solve_dist_full", qp_solve_dist_full, -1);
   rb_define_module_function(RubyQp, "solve_dist", qp_solve_dist, -1);
+
+  gsl_set_error_handler_off();
 }
