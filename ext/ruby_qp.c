@@ -23,7 +23,7 @@ char qp_error_message[QP_ERROR_MESSAGE_BUFFER_LEN];
 void
 qp_gsl_error_handler(const char *reason, const char *file, int line, int gsl_errno) {
   snprintf(qp_error_message, QP_ERROR_MESSAGE_BUFFER_LEN, 
-           "[GSL error (%d) in %s:%d]: %s", gsl_errno, file, line, reason);
+           "[GSL error (%d) in %s:%d] %s", gsl_errno, file, line, reason);
 }
 
 // Return a ruby exception class appropriate to the GSL error code. 
@@ -74,13 +74,19 @@ qp_error_handler(int status) {
 // 
 void
 qp_ensure_vector(const VALUE ary) {
-  int i;
+  int i, len;
 
   // A vector argument must be a ruby Array
   Check_Type(ary, T_ARRAY);
 
+  // A vector must have at least one element
+  len = RARRAY_LEN(ary);
+  if (len == 0) {
+    rb_raise(rb_eArgError, "Vectors must have at least one element.");
+  }
+
   // All entries in the Array must be Floats or Fixnums
-  for (i = 0; i < RARRAY_LEN(ary); i++) {
+  for (i = 0; i < len; i++) {
     if (rb_obj_is_kind_of(rb_ary_entry(ary, i), rb_cNumeric) == Qfalse) {
       rb_raise(rb_eArgError, "Vector entries must be Numeric.");
     }
@@ -96,13 +102,20 @@ qp_ensure_matrix(const VALUE ary) {
   // A matrix argument must be a ruby Array
   Check_Type(ary, T_ARRAY);
 
-  // If it's an empty Array, there's nothing to check
+  // A matrix can't be empty
   nrow = RARRAY_LEN(ary);
-  if (nrow == 0) return;
+  if (nrow == 0) {
+    rb_raise(rb_eArgError, "Matrices must have at least one row.");
+  }
 
   // Make sure the first value in ary is an Array and grab its length
   Check_Type(rb_ary_entry(ary, 0), T_ARRAY);
   ncol = QP_MATRIX_NCOL(ary);
+
+  // Matrix columns can't be empty
+  if (ncol == 0) {
+    rb_raise(rb_eArgError, "Matrix columns must have at least one element.");
+  }
 
   // Every entry in ary should be an Array. 
   // All sub-Arrays should have the same length
@@ -257,6 +270,10 @@ qp_call_cqp(VALUE *qp_result, gsl_matrix *Qmat, gsl_vector *qvec,
 // The constraint +Cx = d+ means that each entry in the vector +Cx+ is greater than or
 // equal to the corresponding entry in the vector +d+.
 //
+// The underlying algorithm requires that there be at least one equality constraint and
+// at least one inequality constraint. That is, +A+ and +C+ must have at least one row
+// and +b+ and +d+ must have at least one entry.
+//
 // Returns a ruby Hash with the following keys and values set:
 //   "solution"      => minimizing solution
 //   "lagrange_eq"   => Lagrange multipliers corresponding to Ax = b
@@ -336,6 +353,10 @@ qp_solve(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
 // optional argument specified by _w_vec_). A larger number in the ith entry of _w_vec_
 // means that the ith coordinate will have a greater effect on the distance computed by
 // the norm. If _w_vec_ is not given, then +||.||+ is just the standard Euclidean norm.
+//
+// The underlying algorithm requires that there be at least one equality constraint and
+// at least one inequality constraint. That is, +A+ and +C+ must have at least one row
+// and +b+ and +d+ must have at least one entry.
 //
 // Returns a ruby Hash with the following keys and values set:
 //   "solution"      => minimizing solution
