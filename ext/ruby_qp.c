@@ -227,10 +227,6 @@ qp_call_cqp(VALUE *qp_result, gsl_matrix *Qmat, gsl_vector *qvec,
 // The constraint +Cx = d+ means that each entry in the vector +Cx+ is greater than or
 // equal to the corresponding entry in the vector +d+.
 //
-// *Warning*: It's up to the caller to ensure that the argument dimensions and 
-// constraints are consistent. If not, then the method call will fail, leaving unfreed 
-// memory.
-//
 // Returns a ruby Hash with the following keys and values set:
 //   "solution"      => minimizing solution
 //   "lagrange_eq"   => Lagrange multipliers corresponding to Ax = b
@@ -323,10 +319,6 @@ qp_solve(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
 // optional argument specified by _w_vec_). A larger number in the ith entry of _w_vec_
 // means that the ith coordinate will have a greater effect on the distance computed by
 // the norm. If _w_vec_ is not given, then +||.||+ is just the standard Euclidean norm.
-//
-// *Warning*: It's up to the caller to ensure that the argument dimensions and 
-// constraints are consistent. If not, then the method call will fail, leaving unfreed 
-// memory.
 //
 // Returns a ruby Hash with the following keys and values set:
 //   "solution"      => minimizing solution
