@@ -208,8 +208,6 @@ qp_matrix_to_ary(const gsl_matrix *mat) {
 //   "lagrange_eq"   => Lagrange multipliers corresponding to Ax = b
 //   "lagrange_ineq" => Lagrange multipliers corresponding to Cx >= d
 //   "iterations"    => number of iterations to find the solution
-//   "status"        => final status (GSL_SUCCESS or GSL_CONTINUE if maximum number of 
-//                      iterations was reached)
 //
 int
 qp_call_cqp(VALUE *qp_result, gsl_matrix *Qmat, gsl_vector *qvec, 
@@ -246,7 +244,6 @@ qp_call_cqp(VALUE *qp_result, gsl_matrix *Qmat, gsl_vector *qvec,
   rb_hash_aset(*qp_result, rb_str_new2("lagrange_eq"), qp_vector_to_ary(gsl_cqpminimizer_lm_eq(s)));
   rb_hash_aset(*qp_result, rb_str_new2("lagrange_ineq"), qp_vector_to_ary(gsl_cqpminimizer_lm_ineq(s)));
   rb_hash_aset(*qp_result, rb_str_new2("iterations"), ULONG2NUM(iter));
-  rb_hash_aset(*qp_result, rb_str_new2("status"), INT2FIX(status));
 
   gsl_cqpminimizer_free(s);
   free(cqp_data);
@@ -279,8 +276,6 @@ qp_call_cqp(VALUE *qp_result, gsl_matrix *Qmat, gsl_vector *qvec,
 //   "lagrange_eq"   => Lagrange multipliers corresponding to Ax = b
 //   "lagrange_ineq" => Lagrange multipliers corresponding to Cx >= d
 //   "iterations"    => number of iterations to find the solution
-//   "status"        => final status (GSL_SUCCESS or GSL_CONTINUE if maximum number of 
-//                      iterations was reached)
 //
 VALUE
 qp_solve_full(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary, 
@@ -363,8 +358,6 @@ qp_solve(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
 //   "lagrange_eq"   => Lagrange multipliers corresponding to Ax = b
 //   "lagrange_ineq" => Lagrange multipliers corresponding to Cx >= d
 //   "iterations"    => number of iterations to find the solution
-//   "status"        => final status (GSL_SUCCESS or GSL_CONTINUE if maximum number of 
-//                      iterations was reached)
 //
 VALUE
 qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
