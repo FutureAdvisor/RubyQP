@@ -8,12 +8,67 @@
 #define QP_MAX_ITER 1000
 #define QP_EPS_GAP 1e-10
 #define QP_EPS_RESIDUALS 1e-10
+#define QP_ERROR_MESSAGE_BUFFER_LEN 200
 
 #define QP_MATRIX_ENTRY(VALUE,i,j) rb_ary_entry(rb_ary_entry(VALUE,i),j)
 #define QP_MATRIX_NROW RARRAY_LEN
 #define QP_MATRIX_NCOL(VALUE) RARRAY_LEN(rb_ary_entry(VALUE,0))
 
 VALUE RubyQp = Qnil;
+
+char qp_error_message[QP_ERROR_MESSAGE_BUFFER_LEN];
+
+// Copy error state to the error message.
+//
+void
+qp_gsl_error_handler(const char *reason, const char *file, int line, int gsl_errno) {
+  snprintf(qp_error_message, QP_ERROR_MESSAGE_BUFFER_LEN, 
+           "[GSL error (%d) in %s:%d]: %s", gsl_errno, file, line, reason);
+}
+
+// Return a ruby exception class appropriate to the GSL error code. 
+//
+VALUE
+qp_error_class_for(int status) {
+  VALUE error_class;
+
+  switch(status) {
+    case GSL_EBADLEN:
+    case GSL_EDOM:
+    case GSL_EINVAL:
+      error_class = rb_eArgError;
+      break;
+    case GSL_ERANGE:
+    case GSL_EUNDRFLW:
+    case GSL_EOVRFLW:
+      error_class = rb_eRangeError;
+      break;
+    case GSL_ENOMEM:
+      error_class = rb_eNoMemError;
+      break;
+    case GSL_EZERODIV:
+      error_class = rb_eZeroDivError;
+      break;
+    default:
+      error_class = rb_eException;
+  }
+
+  return error_class;
+}
+
+// Raise a ruby exception in case in case of a nonzero status.
+//
+void
+qp_error_handler(int status) {
+  if (status == GSL_CONTINUE) {
+    rb_raise(rb_eException, "Maximum iterations reached, check problem constraints for consistency.");
+  } else if (status < 0) {
+    rb_raise(qp_error_class_for(status), gsl_strerror(status));
+  } else if (status > 0) {
+    // GSL error handler was invoked
+    rb_raise(qp_error_class_for(status), qp_error_message);
+  }
+}
 
 // Raise a ruby Exception if ary can't be interpreted as a GSL vector.
 // 
@@ -133,31 +188,6 @@ qp_matrix_to_ary(const gsl_matrix *mat) {
   return ary;
 }
 
-// Return a ruby exception class appropriate to the GSL error code. 
-//
-VALUE
-qp_error_class_for(int status) {
-  VALUE error_class;
-
-  switch(status) {
-    case GSL_EBADLEN:
-    case GSL_EDOM:
-    case GSL_EINVAL:
-      error_class = rb_eArgError;
-      break;
-    case GSL_ERANGE:
-      error_class = rb_eRangeError;
-      break;
-    case GSL_ENOMEM:
-      error_class = rb_eNoMemError;
-      break;
-    default:
-      error_class = rb_eException;
-  }
-
-  return error_class;
-}
-
 // Call the quadratic programming routine on the arguments. The calling function should
 // check that the parameters are consistent. Failure to do so may result in an error and
 // leave memory unfreed. Returns a ruby Hash with the following keys and values set:
@@ -189,12 +219,12 @@ qp_call_cqp(VALUE *qp_result, gsl_matrix *Qmat, gsl_vector *qvec,
 
   T = gsl_cqpminimizer_mg_pdip;
   s = gsl_cqpminimizer_alloc(T, Qmat->size1, Amat->size1, Cmat->size1);
-  status = gsl_cqpminimizer_set(s, cqp_data);
+  if (status = gsl_cqpminimizer_set(s, cqp_data)) { return status; }
 
   iter = 0;
   do {
     iter++;
-    status = gsl_cqpminimizer_iterate(s);
+    if (status = gsl_cqpminimizer_iterate(s)) { return status; }
     status = gsl_cqpminimizer_test_convergence(s, QP_EPS_GAP, QP_EPS_RESIDUALS);
   } while (status == GSL_CONTINUE && iter <= QP_MAX_ITER);
 
@@ -252,17 +282,6 @@ qp_solve_full(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
   qp_ensure_vector(bary);
   qp_ensure_vector(dary);
 
-  // Check argument dimensions
-  ncol = QP_MATRIX_NCOL(Qary);
-  if (RARRAY_LEN(qary) != ncol ||
-      QP_MATRIX_NCOL(Aary) != ncol ||
-      RARRAY_LEN(bary) != QP_MATRIX_NROW(Aary) ||
-      QP_MATRIX_NCOL(Cary) != ncol ||
-      RARRAY_LEN(dary) != QP_MATRIX_NROW(Cary)) 
-  {
-    rb_raise(rb_eArgError, "Arguments have inconsistent dimensions");
-  }
-
   Qmat = qp_ary_to_matrix(Qary);
   Amat = qp_ary_to_matrix(Aary);
   Cmat = qp_ary_to_matrix(Cary);
@@ -279,9 +298,7 @@ qp_solve_full(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
   gsl_vector_free(bvec);
   gsl_vector_free(dvec);
 
-  if (status) {
-    rb_raise(qp_error_class_for(status), gsl_strerror(status));
-  }
+  qp_error_handler(status);
 
   return qp_result;
 }
@@ -346,19 +363,15 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
   qp_ensure_vector(dary);
 
   // Check argument dimensions
-  if (QP_MATRIX_NROW(Mary) != RARRAY_LEN(mary) ||
-      QP_MATRIX_NCOL(Mary) != QP_MATRIX_NCOL(Aary) ||
-      QP_MATRIX_NROW(Aary) != RARRAY_LEN(bary) ||
-      QP_MATRIX_NCOL(Mary) != QP_MATRIX_NCOL(Cary) ||
-      QP_MATRIX_NROW(Cary) != RARRAY_LEN(dary))
+  if (QP_MATRIX_NROW(Mary) != RARRAY_LEN(mary))
   {
-    rb_raise(rb_eArgError, "Arguments have inconsistent dimensions");
+    rb_raise(rb_eArgError, "m_mat.length != m_vec.length");
   }
 
   if (argc > 6) {
     qp_ensure_vector(wary);
     if (QP_MATRIX_NROW(Mary) != RARRAY_LEN(wary)) {
-      rb_raise(rb_eArgError, "Weight vector length inconsistent with dimension of M");
+      rb_raise(rb_eArgError, "m_mat.length != w_vec.length");
     }
   }
 
@@ -412,9 +425,7 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
   gsl_vector_free(tempvec);
   gsl_vector_free(qvec);
 
-  if (status) {
-    rb_raise(qp_error_class_for(status), gsl_strerror(status));
-  }
+  qp_error_handler(status);
 
   return qp_result;
 }
@@ -437,5 +448,5 @@ void Init_ruby_qp(void) {
   rb_define_module_function(RubyQp, "solve_dist_full", qp_solve_dist_full, -1);
   rb_define_module_function(RubyQp, "solve_dist", qp_solve_dist, -1);
 
-  gsl_set_error_handler_off();
+  gsl_set_error_handler(&qp_gsl_error_handler);
 }
