@@ -188,9 +188,9 @@ qp_matrix_to_ary(const gsl_matrix *mat) {
   return ary;
 }
 
-// Call the quadratic programming routine on the arguments. The calling function should
-// check that the parameters are consistent. Failure to do so may result in an error and
-// leave memory unfreed. Returns a ruby Hash with the following keys and values set:
+// Call the quadratic programming routine on the arguments. Returns a GSL status code.
+// If the call is successful, *qp_result will be set to a ruby Hash with the following 
+// keys and values set:
 //   "solution"      => minimizing solution
 //   "lagrange_eq"   => Lagrange multipliers corresponding to Ax = b
 //   "lagrange_ineq" => Lagrange multipliers corresponding to Cx >= d
