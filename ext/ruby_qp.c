@@ -348,6 +348,11 @@ qp_solve(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
 // optional argument specified by _w_vec_). A larger number in the ith entry of _w_vec_
 // means that the ith coordinate will have a greater effect on the distance computed by
 // the norm. If _w_vec_ is not given, then +||.||+ is just the standard Euclidean norm.
+// Formally,
+//   ||v||^2 = (w_1)^2(v_1)^2 + ... + (w_n)^2(v_n)^2
+// The weights are squared so that setting a weight of w_i in the ith coordinate means
+// that distances in the ith coordinate are multiplied by w_i (instead of the square root
+// of w_i).
 //
 // The underlying algorithm requires that there be at least one equality constraint and
 // at least one inequality constraint. That is, +A+ and +C+ must have at least one row
@@ -365,6 +370,7 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
   gsl_matrix *Mmat, *Amat, *Cmat, *Wmat, *Qmat, *Tempmat;
   gsl_vector *mvec, *bvec, *dvec, *qvec, *tempvec;
   int i, j, len, status;
+  double weight;
   VALUE qp_result;
 
   rb_scan_args(argc, argv, "61", &Mary, &mary, &Aary, &bary, &Cary, &dary, &wary);
@@ -400,7 +406,8 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
     len = RARRAY_LEN(wary);
     Wmat = gsl_matrix_calloc(len, len);
     for (i = 0; i < len; i++) {
-      gsl_matrix_set(Wmat, i, i, NUM2DBL(rb_ary_entry(wary, i)));
+      weight = NUM2DBL(rb_ary_entry(wary, i));
+      gsl_matrix_set(Wmat, i, i, weight*weight);
     }
   } else {
     len = Mmat->size1;
