@@ -1,13 +1,10 @@
 #include <ruby.h>
+#include <IpStdCInterface.h>
 #include <gsl/gsl_vector.h>
 #include <gsl/gsl_matrix.h>
 #include <gsl/gsl_blas.h>
 #include <gsl/gsl_errno.h>
-#include "gsl_cqp.h"
 
-#define QP_MAX_ITER 1000
-#define QP_EPS_GAP 1e-10
-#define QP_EPS_RESIDUALS 1e-10
 #define QP_ERROR_MESSAGE_BUFFER_LEN 200
 
 #define QP_MATRIX_ENTRY(VALUE,i,j) rb_ary_entry(rb_ary_entry(VALUE,i),j)
@@ -15,6 +12,8 @@
 #define QP_MATRIX_NCOL(VALUE) RARRAY_LEN(rb_ary_entry(VALUE,0))
 
 VALUE RubyQp = Qnil;
+
+// ERROR HANDLING
 
 char qp_error_message[QP_ERROR_MESSAGE_BUFFER_LEN];
 
@@ -50,7 +49,7 @@ qp_error_class_for(int status) {
       error_class = rb_eZeroDivError;
       break;
     default:
-      error_class = rb_eException;
+      error_class = rb_eStandardError;
   }
 
   return error_class;
@@ -91,6 +90,86 @@ qp_ensure_vector(const VALUE ary) {
       rb_raise(rb_eArgError, "Vector entries must be Numeric.");
     }
   }
+}
+
+// TYPES
+
+// TODO do all these fields need to be here?
+// Encode the parameters to the minimization problem
+//   min \\Ax - b|| 
+// where \\.\\ is the weighted norm given by
+//   \\x\\^2 = (w_1)^2(x_1)^2 + ... + (w_d)^2(x_d)^2
+typedef struct {
+  int nrow;
+  int ncol;
+  gsl_matrix *Amat;
+  gsl_vector *bvec;
+  gsl_matrix *Wmat;
+
+  // coordinate-wise constraints
+  double *x_L;
+  double *x_U;
+
+  // linear constraints (constraining more than one coordinate)
+  int nconstraint;
+  double *g_L;
+  double *g_U;
+  gsl_matrix *Gmat;
+
+} qp_minimum_distance_problem;
+
+qp_minimum_distance_problem*
+new_qp_minimum_distance_problem() {
+  qp_minimum_distance_problem *prob;
+  prob = malloc(sizeof(qp_minimum_distance_problem));
+
+  prob->Amat = NULL;
+  prob->bvec = NULL;
+  prob->Wmat = NULL;
+  prob->x_L  = NULL;
+  prob->x_U  = NULL;
+  prob->g_L  = NULL;
+  prob->g_U  = NULL;
+  prob->Gmat = NULL;
+
+  return prob;
+}
+
+void
+free_qp_minimum_distance_problem(qp_minimum_distance_problem* prob) {
+  if (prob->Amat != NULL)
+    gsl_matrix_free(prob->Amat);
+  if (prob->bvec != NULL)
+    gsl_vector_free(prob->bvec);
+  if (prob->Wmat != NULL)
+    gsl_matrix_free(prob->Wmat);
+  if (prob->x_L != NULL)
+    free(prob->x_L);
+  if (prob->x_U != NULL)
+    free(prob->x_U);
+  if (prob->g_L != NULL)
+    free(prob->g_L);
+  if (prob->g_U != NULL)
+    free(prob->g_U);
+  if (prob->Gmat != NULL)
+    gsl_matrix_free(prob->Gmat);
+
+  free(prob);
+}
+
+// TYPE CONVERSION
+
+// Copy memory into a (newly allocated) GSL vector
+gsl_vector*
+qp_new_vector(int n, double *x) {
+  int i;
+  gsl_vector *xvec;
+
+  xvec = gsl_vector_alloc(n);
+  for (i = 0; i < n; i++)
+    gsl_vector_set(xvec, i, x[i]);
+
+  return xvec;
 }
 
 // Raise a ruby Exception if ary can't be interpreted as a GSL matrix.
@@ -201,135 +280,189 @@ qp_matrix_to_ary(const gsl_matrix *mat) {
   return ary;
 }
 
-// Call the quadratic programming routine on the arguments. Returns a GSL status code.
-// If the call is successful, *qp_result will be set to a ruby Hash with the following 
-// keys and values set:
-//   "solution"      => minimizing solution
-//   "lagrange_eq"   => Lagrange multipliers corresponding to Ax = b
-//   "lagrange_ineq" => Lagrange multipliers corresponding to Cx >= d
-//   "iterations"    => number of iterations to find the solution
-//
-int
-qp_call_cqp(VALUE *qp_result, gsl_matrix *Qmat, gsl_vector *qvec, 
-            gsl_matrix *Amat, gsl_vector *bvec, 
-            gsl_matrix *Cmat, gsl_vector *dvec) 
-{
-  gsl_cqp_data *cqp_data;
-  size_t iter;
-  int status;
-  const gsl_cqpminimizer_type *T;
-  gsl_cqpminimizer *s;
+// CALLBACKS
 
-  cqp_data = malloc(sizeof(gsl_cqp_data));
-  cqp_data->Q = Qmat;
-  cqp_data->q = qvec;
-  cqp_data->A = Amat;
-  cqp_data->b = bvec;
-  cqp_data->C = Cmat;
-  cqp_data->d = dvec;
+// in all callback functions that follow, user_data should point to an
+// qp_minimum_distance_problem struct.
 
-  T = gsl_cqpminimizer_mg_pdip;
-  s = gsl_cqpminimizer_alloc(T, Qmat->size1, Amat->size1, Cmat->size1);
-  if (status = gsl_cqpminimizer_set(s, cqp_data)) { return status; }
+Bool
+qp_eval_f(Index n, Number *x, Bool new_x, Number *obj_value, UserDataPtr user_data) {
+  int i;
+  qp_minimum_distance_problem *prob;
+  gsl_vector *xvec, *yvec, *zvec;
 
-  iter = 0;
-  do {
-    iter++;
-    if (status = gsl_cqpminimizer_iterate(s)) { return status; }
-    status = gsl_cqpminimizer_test_convergence(s, QP_EPS_GAP, QP_EPS_RESIDUALS);
-  } while (status == GSL_CONTINUE && iter <= QP_MAX_ITER);
+  prob = (qp_minimum_distance_problem*)user_data;
 
-  *qp_result = rb_hash_new();
-  rb_hash_aset(*qp_result, rb_str_new2("solution"), qp_vector_to_ary(gsl_cqpminimizer_x(s)));
-  rb_hash_aset(*qp_result, rb_str_new2("lagrange_eq"), qp_vector_to_ary(gsl_cqpminimizer_lm_eq(s)));
-  rb_hash_aset(*qp_result, rb_str_new2("lagrange_ineq"), qp_vector_to_ary(gsl_cqpminimizer_lm_ineq(s)));
-  rb_hash_aset(*qp_result, rb_str_new2("iterations"), ULONG2NUM(iter));
+  xvec = qp_new_vector(n, x);
+  yvec = gsl_vector_alloc(prob->nrow);
+  zvec = gsl_vector_alloc(prob->nrow);
+  gsl_vector_memcpy(yvec, prob->bvec);                             // y <- b
+  gsl_blas_dgemv(CblasNoTrans, 1.0, prob->Amat, xvec, -1.0, yvec); // y <- Ax - y
+  gsl_blas_dgemv(CblasNoTrans, 1.0, prob->Wmat, yvec, 0.0, zvec);  // z <- Wy
+  gsl_blas_ddot(zvec, zvec, obj_value);                            // *obj_value <- (z^t)z
 
-  gsl_cqpminimizer_free(s);
-  free(cqp_data);
-
-  return status;
+  gsl_vector_free(xvec);
+  gsl_vector_free(yvec);
+  gsl_vector_free(zvec);
+  return TRUE;
 }
 
-// :call-seq:
-//   RubyQp::solve_full(q_mat, q_vec, a_mat, b_vec, c_mat, d_vec) => hash
-//
-// Find +x+ which minimizes the expression
-//   (1/2)(x^t)Qx + (q^t)x
-// subject to the constraints
-//   Ax = b 
-//   Cx >= d,
-// where +Q+ is the matrix specified by _q_mat_, +q+ is the vector specified by _q_vec_, 
-// and so forth for +A+, +b+, +C+, and +d+. _q_mat_ (and all matrix arguments) should be 
-// an Array of Arrays. Sub-Arrays should all have the same length, and their entries must 
-// be Numeric. _q_vec_ (and all vector arguments) should be an Array of Numerics. 
-//
-// The constraint +Cx = d+ means that each entry in the vector +Cx+ is greater than or
-// equal to the corresponding entry in the vector +d+.
-//
-// The underlying algorithm requires that there be at least one equality constraint and
-// at least one inequality constraint. That is, +A+ and +C+ must have at least one row
-// and +b+ and +d+ must have at least one entry.
-//
-// Returns a ruby Hash with the following keys and values set:
-//   "solution"      => minimizing solution
-//   "lagrange_eq"   => Lagrange multipliers corresponding to Ax = b
-//   "lagrange_ineq" => Lagrange multipliers corresponding to Cx >= d
-//   "iterations"    => number of iterations to find the solution
-//
-VALUE
-qp_solve_full(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary, 
-              VALUE Cary, VALUE dary) 
-{
-  // copy inputs into GSL matrix and vector types, initialize CQP data
-  int ncol, status;
-  gsl_matrix *Qmat, *Amat, *Cmat;
-  gsl_vector *qvec, *bvec, *dvec;
-  VALUE qp_result;
+Bool
+qp_eval_grad_f(Index n, Number *x, Bool new_x, Number *grad_f, UserDataPtr user_data) {
+  int j;
+  qp_minimum_distance_problem *prob;
+  gsl_vector *xvec, *yvec, *zvec, *wvec;
 
-  qp_ensure_matrix(Qary);
-  qp_ensure_matrix(Aary);
-  qp_ensure_matrix(Cary);
-  qp_ensure_vector(qary);
-  qp_ensure_vector(bary);
-  qp_ensure_vector(dary);
+  // the jth entry of x should evaluate to 2<W^2 (Ax-b), A_j>,
+  // where A_j denotes the jth column of A.
 
-  Qmat = qp_ary_to_matrix(Qary);
-  Amat = qp_ary_to_matrix(Aary);
-  Cmat = qp_ary_to_matrix(Cary);
-  qvec = qp_ary_to_vector(qary);
-  bvec = qp_ary_to_vector(bary);
-  dvec = qp_ary_to_vector(dary);
+  prob = (qp_minimum_distance_problem*)user_data;
+  xvec = qp_new_vector(n, x);
+  yvec = gsl_vector_alloc(prob->nrow);
+  zvec = gsl_vector_alloc(prob->nrow);
+  gsl_vector_memcpy(yvec, prob->bvec);                             // y <- b
+  gsl_blas_dgemv(CblasNoTrans, 1.0, prob->Amat, xvec, -1.0, yvec); // y <- Ax - y
+  gsl_blas_dgemv(CblasNoTrans, 1.0, prob->Wmat, yvec, 0.0, zvec);  // z <- Wy
+  gsl_blas_dgemv(CblasNoTrans, 1.0, prob->Wmat, zvec, 0.0, yvec);  // y <- Wz
 
-  status = qp_call_cqp(&qp_result, Qmat, qvec, Amat, bvec, Cmat, dvec);
+  // y is now equal to W^2(Ax - b)
 
-  gsl_matrix_free(Qmat);
-  gsl_matrix_free(Amat);
-  gsl_matrix_free(Cmat);
-  gsl_vector_free(qvec);
-  gsl_vector_free(bvec);
-  gsl_vector_free(dvec);
+  wvec = gsl_vector_alloc(prob->nrow);
+  for (j = 0; j < n; j++) {
+    gsl_matrix_get_col(wvec, prob->Amat, j);  // z <- A_j
+    gsl_blas_ddot(yvec, wvec, &grad_f[j]);    // grad_f[j] <- (y^t)z
+    grad_f[j] = 2 * grad_f[j];                // grad_f[j] <- 2 * grad_f[j]
+  }
 
-  qp_error_handler(status);
-
-  return qp_result;
+  gsl_vector_free(xvec);
+  gsl_vector_free(yvec);
+  gsl_vector_free(zvec);
+  gsl_vector_free(wvec);
+  return TRUE;
 }
 
-// :call-seq: 
-//   RubyQp::solve(q_mat, q_vec, a_mat, b_vec, c_mat, d_vec) => array
-//
-// Same as RubyQp::solve_full, but returns only the solution vector as a ruby Array.
-//
-VALUE
-qp_solve(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary, 
-              VALUE Cary, VALUE dary) 
-{
-  VALUE qp_result = qp_solve_full(self, Qary, qary, Aary, bary, Cary, dary);
-  return rb_hash_aref(qp_result, rb_str_new2("solution"));
+Bool
+qp_eval_g(Index n, Number *x, Bool new_x, Index m, Number *g, UserDataPtr user_data) {
+  int i;
+  qp_minimum_distance_problem *prob;
+  gsl_vector *xvec, *yvec;
+
+  prob = (qp_minimum_distance_problem*)user_data;
+  xvec = qp_new_vector(n, x);
+  yvec = gsl_vector_alloc(n);
+
+  for (i = 0; i < m; i++) {
+    gsl_matrix_get_row(yvec, prob->Gmat, i);  // y <- G_i (ith row of G)
+    gsl_blas_ddot(xvec, yvec, &g[i]);         // g[i] <- (x^t)y
+  }
+
+  gsl_vector_free(xvec);
+  gsl_vector_free(yvec);
+  return TRUE;
 }
 
+// TODO the values computed here could be computed once and stored in the
+// problem struct.
+Bool
+qp_eval_jac_g(Index n, Number *x, Bool new_x, Index m, 
+                Index nele_jac, Index *iRow, Index *jCol, Number *values, UserDataPtr user_data) 
+{
+  // Our Jacobian is just prob->Gmat
+  int i, j, k;
+  double d;
+  qp_minimum_distance_problem *prob;
+  prob = (qp_minimum_distance_problem*)user_data;
+
+  if (values == NULL) {
+    // return the structure of the Jacobian:
+    // record the indices of nonzero entries in prob->Gmat
+    k = 0;
+    for (i = 0; i < m; i++) {
+      for (j = 0; j < n; j++) {
+        if (gsl_matrix_get(prob->Gmat, i, j) != 0) {
+          iRow[k] = i;
+          jCol[k] = j;
+          k++;
+        }
+      }
+    }
+  } else {
+    // return the values of the Jacobian of the constraints:
+    // record the values of nonzero entries in prob->Gmat
+    k = 0;
+    for (i = 0; i < m; i++) {
+      for (j = 0; j < n; j++) {
+        if ((d = gsl_matrix_get(prob->Gmat, i, j)) != 0) {
+          values[k++] = d;
+        }
+      }
+    }
+  }
+
+  return TRUE;
+}
+
+Bool
+qp_eval_h(Index n, Number *x, Bool new_x, Number obj_factor,
+            Index m, Number *lambda, Bool new_lambda,
+            Index nele_hess, Index *iRow, Index *jCol,
+            Number *values, UserDataPtr user_data)
+{
+  int i, j, k;
+
+  // Since our constraints are linear, this is just the Hessian of the objective
+  // function, which is 2<A_i, W^2 A_j>, where A_i and A_j refer to the ith and jth
+  // column of A.
+
+  if (values == NULL) {
+    // This is a symmetric matrix, fill the lower left triangle only.
+    k = 0;
+    for (i = 0; i < n; i++) {
+      for (j = 0; j <= i; j++) {
+        iRow[k] = i;
+        jCol[k] = j;
+        k++;
+      }
+    }
+  } else {
+    qp_minimum_distance_problem *prob;
+    gsl_vector *xvec, *yvec, *zvec;
+
+    prob = (qp_minimum_distance_problem*)user_data;
+    xvec = gsl_vector_alloc(prob->nrow);
+    yvec = gsl_vector_alloc(prob->nrow);
+    zvec = gsl_vector_alloc(prob->nrow);
+
+    k = 0;
+    for (i = 0; i < n; i++) {
+      for (j = 0; j <= i; j++) {
+        gsl_matrix_get_col(xvec, prob->Amat, i);                         // x <- A_i
+        gsl_matrix_get_col(yvec, prob->Amat, j);                         // y <- A_j
+        gsl_blas_dgemv(CblasNoTrans, 1.0, prob->Wmat, yvec, 0.0, zvec);  // z <- Wy
+        gsl_blas_dgemv(CblasNoTrans, 1.0, prob->Wmat, zvec, 0.0, yvec);  // y <- Wz
+        gsl_blas_ddot(xvec, yvec, &values[k]);                           // values[k] <- (x^t)y
+        values[k] = 2 * values[k];
+        k++;
+      }
+    }
+
+    gsl_vector_free(xvec);
+    gsl_vector_free(yvec);
+    gsl_vector_free(zvec);
+  }
+
+  return TRUE;
+}
+
+// RUBY METHODS
+
+// TODO update comment
 // :call-seq:
 //   RubyQp::solve_dist_full(m_mat, m_vec, a_mat, b_vec, c_mat, d_vec, w_vec = nil) => hash
+//
+//   ||Ax - b||
+//   x_L <= x <= x_U
+//   g_L <= g(x) <= g_U
 //
 // Find x which minimizes the expression
 //   ||Mx - m||
@@ -360,94 +493,153 @@ qp_solve(VALUE self, VALUE Qary, VALUE qary, VALUE Aary, VALUE bary,
 //
 // Returns a ruby Hash with the following keys and values set:
 //   "solution"      => minimizing solution
-//   "lagrange_eq"   => Lagrange multipliers corresponding to Ax = b
-//   "lagrange_ineq" => Lagrange multipliers corresponding to Cx >= d
-//   "iterations"    => number of iterations to find the solution
 //
 VALUE
 qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
-  VALUE Mary, mary, Aary, bary, Cary, dary, wary;
-  gsl_matrix *Mmat, *Amat, *Cmat, *Wmat, *Qmat, *Tempmat;
-  gsl_vector *mvec, *bvec, *dvec, *qvec, *tempvec;
-  int i, j, len, status;
-  double weight;
-  VALUE qp_result;
+  int i, j, nele_jac, nele_hess, status;
+  double *x;
+  VALUE a_mat, b_vec, x_lower, x_upper, g_mat, g_lower, g_upper, x_init, w_vec;
+  gsl_matrix *matrix;
+  gsl_vector *vector;
+  qp_minimum_distance_problem *prob;
+  IpoptProblem nlp;
+  VALUE qp_solution, qp_result;
 
-  rb_scan_args(argc, argv, "61", &Mary, &mary, &Aary, &bary, &Cary, &dary, &wary);
+  rb_scan_args(argc, argv, "81", &a_mat, &b_vec, &x_lower, &x_upper, &g_mat, &g_lower, &g_upper, &x_init, &w_vec);
 
-  qp_ensure_matrix(Mary);
-  qp_ensure_matrix(Aary);
-  qp_ensure_matrix(Cary);
-  qp_ensure_vector(mary);
-  qp_ensure_vector(bary);
-  qp_ensure_vector(dary);
+  qp_ensure_matrix(a_mat);
+  qp_ensure_matrix(g_mat);
+  qp_ensure_vector(b_vec);
+  qp_ensure_vector(x_lower);
+  qp_ensure_vector(x_upper);
+  qp_ensure_vector(g_lower);
+  qp_ensure_vector(g_upper);
+  qp_ensure_vector(x_init);
+
+  // TODO add more dimension checks; no longer handled by library
 
   // Check argument dimensions
-  if (QP_MATRIX_NROW(Mary) != RARRAY_LEN(mary))
-  {
-    rb_raise(rb_eArgError, "m_mat.length != m_vec.length");
-  }
+  if (QP_MATRIX_NROW(a_mat) != RARRAY_LEN(b_vec))
+    rb_raise(rb_eArgError, "a_mat.length != b_vec.length");
 
-  if (argc > 6) {
-    qp_ensure_vector(wary);
-    if (QP_MATRIX_NROW(Mary) != RARRAY_LEN(wary)) {
-      rb_raise(rb_eArgError, "m_mat.length != w_vec.length");
+  if (QP_MATRIX_NCOL(a_mat) != RARRAY_LEN(x_lower))
+    rb_raise(rb_eArgError, "a_mat[0].length != x_lower.length");
+
+  if (QP_MATRIX_NCOL(a_mat) != RARRAY_LEN(x_upper))
+    rb_raise(rb_eArgError, "a_mat[0].length != x_upper.length");
+
+  if (QP_MATRIX_NCOL(a_mat) != QP_MATRIX_NCOL(g_mat))
+    rb_raise(rb_eArgError, "a_mat[0].length != g_mat[0].length");
+
+  if (QP_MATRIX_NROW(g_mat) != RARRAY_LEN(g_lower))
+    rb_raise(rb_eArgError, "g_mat.length != g_lower.length");
+
+  if (QP_MATRIX_NROW(g_mat) != RARRAY_LEN(g_upper))
+    rb_raise(rb_eArgError, "g_mat.length != g_upper.length");
+
+  if (QP_MATRIX_NCOL(a_mat) != RARRAY_LEN(x_init))
+    rb_raise(rb_eArgError, "a_mat[0].length != x_init.length");
+
+  if (argc > 8) {
+    qp_ensure_vector(w_vec);
+    if (QP_MATRIX_NROW(a_mat) != RARRAY_LEN(w_vec)) {
+      rb_raise(rb_eArgError, "a_mat.length != w_vec.length");
     }
   }
 
-  Mmat = qp_ary_to_matrix(Mary);
-  Amat = qp_ary_to_matrix(Aary);
-  Cmat = qp_ary_to_matrix(Cary);
-  mvec = qp_ary_to_vector(mary);
-  bvec = qp_ary_to_vector(bary);
-  dvec = qp_ary_to_vector(dary);
+  // Set up the problem parameters
 
-  if (argc > 6) {
-    len = RARRAY_LEN(wary);
-    Wmat = gsl_matrix_calloc(len, len);
-    for (i = 0; i < len; i++) {
-      weight = NUM2DBL(rb_ary_entry(wary, i));
-      gsl_matrix_set(Wmat, i, i, weight*weight);
-    }
+  prob = new_qp_minimum_distance_problem();
+  prob->nrow = QP_MATRIX_NROW(a_mat);
+  prob->ncol = QP_MATRIX_NCOL(a_mat);
+  prob->Amat = qp_ary_to_matrix(a_mat);
+  prob->bvec = qp_ary_to_vector(b_vec);
+
+  prob->x_L = malloc(prob->ncol * sizeof(double));
+  for (i = 0; i < prob->ncol; i++)
+    prob->x_L[i] = NUM2DBL(rb_ary_entry(x_lower, i));
+
+  prob->x_U = malloc(prob->ncol * sizeof(double));
+  for (i = 0; i < prob->ncol; i++)
+    prob->x_U[i] = NUM2DBL(rb_ary_entry(x_upper, i));
+                                  
+  prob->nconstraint = QP_MATRIX_NROW(g_mat);
+  prob->Gmat = qp_ary_to_matrix(g_mat);
+
+  prob->g_L = malloc(prob->nconstraint * sizeof(double));
+  for (i = 0; i < prob->nconstraint; i++)
+    prob->g_L[i] = NUM2DBL(rb_ary_entry(g_lower, i));
+
+  prob->g_U = malloc(prob->nconstraint * sizeof(double));
+  for (i = 0; i < prob->nconstraint; i++)
+    prob->g_U[i] = NUM2DBL(rb_ary_entry(g_upper, i));
+
+  x = malloc(prob->ncol * sizeof(double));
+  for (i = 0; i < prob->ncol; i++)
+    x[i] = NUM2DBL(rb_ary_entry(x_init, i));
+
+  if (argc > 8) {
+    matrix = gsl_matrix_calloc(prob->nrow, prob->nrow);
+    for (i = 0; i < prob->nrow; i++)
+      gsl_matrix_set(matrix, i, i, NUM2DBL(rb_ary_entry(w_vec, i)));
+    prob->Wmat = matrix;
   } else {
-    len = Mmat->size1;
-    Wmat = gsl_matrix_calloc(len, len);
-    for (i = 0; i < len; i++) {
-      gsl_matrix_set(Wmat, i, i, 1.0);
-    }
+    matrix = gsl_matrix_calloc(prob->nrow, prob->nrow);
+    for (i = 0; i < prob->nrow; i++)
+      gsl_matrix_set(matrix, i, i, 1.0);
+    prob->Wmat = matrix;
   }
 
-  // need to transform the problem to form (1/2)(x^t)Qx + (q^t)x
-  // Q = (M^t)WM
-  // q = -(M^t)Wm
+  // count the number of nonzero elements in the constraint Jacobian
+  // (i.e., the number of nonzero elements in Gmat)
+  nele_jac = 0;
+  for (i = 0; i < prob->nconstraint; i++)
+    for (j = 0; j < prob->ncol; j++)
+      if (gsl_matrix_get(prob->Gmat, i, j) != 0)
+        nele_jac++;
 
-  // Compute Q
-  Tempmat = gsl_matrix_alloc(Wmat->size1, Mmat->size2);
-  gsl_blas_dgemm(CblasNoTrans, CblasNoTrans, 1.0, Wmat, Mmat, 0.0, Tempmat);
-  Qmat = gsl_matrix_alloc(Mmat->size2, Mmat->size2);
-  gsl_blas_dgemm(CblasTrans, CblasNoTrans, 1.0, Mmat, Tempmat, 0.0, Qmat);
+  // our Hessian is dense, so nele_hess is just the number of entries below the diagonal
+  // (inclusive) in the Hessian.
+  nele_hess = 0;
+  for (i = 1; i <= prob->ncol; i++)
+    nele_hess += i;
 
-  // Compute q
-  tempvec = gsl_vector_alloc(Mmat->size1);
-  gsl_blas_dgemv(CblasNoTrans, 1.0, Wmat, mvec, 0.0, tempvec);
-  qvec = gsl_vector_alloc(Mmat->size2);
-  gsl_blas_dgemv(CblasTrans, -1.0, Mmat, tempvec, 0.0, qvec);
+  nlp = CreateIpoptProblem(prob->ncol,
+                           prob->x_L,
+                           prob->x_U,
+                           prob->nconstraint,
+                           prob->g_L,
+                           prob->g_U,
+                           nele_jac,
+                           nele_hess,
+                           0,
+                           &qp_eval_f,
+                           &qp_eval_g,
+                           &qp_eval_grad_f,
+                           &qp_eval_jac_g,
+                           &qp_eval_h);
 
-  status = qp_call_cqp(&qp_result, Qmat, qvec, Amat, bvec, Cmat, dvec);
+  // TODO these options should be set globally via an options file
+  AddIpoptIntOption(nlp, "print_level", 0);
+  AddIpoptIntOption(nlp, "max_iter", 200);
 
-  gsl_matrix_free(Mmat);
-  gsl_matrix_free(Amat);
-  gsl_matrix_free(Cmat);
-  gsl_matrix_free(Tempmat);
-  gsl_matrix_free(Qmat);
-  gsl_vector_free(mvec);
-  gsl_vector_free(bvec);
-  gsl_vector_free(dvec);
-  gsl_vector_free(tempvec);
-  gsl_vector_free(qvec);
+  // TODO capture more of the output
+  status = IpoptSolve(nlp, x, NULL, NULL, NULL, NULL, NULL, prob);
 
-  qp_error_handler(status);
+  qp_solution = rb_ary_new();
+  for (i = 0; i < prob->ncol; i++)
+    rb_ary_push(qp_solution, rb_float_new(x[i]));
 
+  qp_result = rb_hash_new();
+  rb_hash_aset(qp_result, rb_str_new2("solution"), qp_solution);
+
+  FreeIpoptProblem(nlp);
+  free(x);
+  free_qp_minimum_distance_problem(prob);
+
+  // memory referenced by matrix and vector will be freed by free_qp_minimum_distance_problem
+
+  // qp_error_handler(status);
   return qp_result;
 }
 
@@ -464,8 +656,6 @@ qp_solve_dist(int argc, VALUE *argv, VALUE self) {
 
 void Init_ruby_qp(void) {
   RubyQp = rb_define_module("RubyQp");
-  rb_define_module_function(RubyQp, "solve_full", qp_solve_full, 6);
-  rb_define_module_function(RubyQp, "solve", qp_solve, 6);
   rb_define_module_function(RubyQp, "solve_dist_full", qp_solve_dist_full, -1);
   rb_define_module_function(RubyQp, "solve_dist", qp_solve_dist, -1);
 
