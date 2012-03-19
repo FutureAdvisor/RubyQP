@@ -621,6 +621,7 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
 
   // TODO these options should be set globally via an options file
   AddIpoptIntOption(nlp, "print_level", 0);
+  AddIpoptIntOption(nlp, "max_iter", 200);
 
   // TODO capture more of the output
   status = IpoptSolve(nlp, x, NULL, NULL, NULL, NULL, NULL, prob);
