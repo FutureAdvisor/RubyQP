@@ -25,26 +25,16 @@ VALUE RubyQp = Qnil;
 
 // TYPES
 
-// TODO do all these fields need to be here? Callbacs don't need x_L, x_U, g_L, g_U
 // Encode the parameters to the minimization problem
 //   min \\Ax - b|| 
 // where \\.\\ is the weighted norm given by
 //   \\x\\^2 = (w_1)^2(x_1)^2 + ... + (w_d)^2(x_d)^2
 typedef struct {
-  int nrow;
-  int ncol;
   gsl_matrix *Amat;
   gsl_vector *bvec;
   gsl_matrix *Wmat;
 
-  // coordinate-wise constraints
-  double *x_L;
-  double *x_U;
-
   // linear constraints (constraining more than one coordinate)
-  int nconstraint;
-  double *g_L;
-  double *g_U;
   gsl_matrix *Gmat;
 
 } qp_minimum_distance_problem;
@@ -57,10 +47,6 @@ new_qp_minimum_distance_problem() {
   prob->Amat = NULL;
   prob->bvec = NULL;
   prob->Wmat = NULL;
-  prob->x_L  = NULL;
-  prob->x_U  = NULL;
-  prob->g_L  = NULL;
-  prob->g_U  = NULL;
   prob->Gmat = NULL;
 
   return prob;
@@ -74,14 +60,6 @@ free_qp_minimum_distance_problem(qp_minimum_distance_problem* prob) {
     gsl_vector_free(prob->bvec);
   if (prob->Wmat != NULL)
     gsl_matrix_free(prob->Wmat);
-  if (prob->x_L != NULL)
-    free(prob->x_L);
-  if (prob->x_U != NULL)
-    free(prob->x_U);
-  if (prob->g_L != NULL)
-    free(prob->g_L);
-  if (prob->g_U != NULL)
-    free(prob->g_U);
   if (prob->Gmat != NULL)
     gsl_matrix_free(prob->Gmat);
 
@@ -253,8 +231,8 @@ qp_eval_f(Index n, Number *x, Bool new_x, Number *obj_value, UserDataPtr user_da
   prob = (qp_minimum_distance_problem*)user_data;
 
   xvec = qp_new_vector(n, x);
-  yvec = gsl_vector_alloc(prob->nrow);
-  zvec = gsl_vector_alloc(prob->nrow);
+  yvec = gsl_vector_alloc(prob->bvec->size);
+  zvec = gsl_vector_alloc(prob->bvec->size);
   gsl_vector_memcpy(yvec, prob->bvec);                             // y <- b
   gsl_blas_dgemv(CblasNoTrans, 1.0, prob->Amat, xvec, -1.0, yvec); // y <- Ax - y
   gsl_blas_dgemv(CblasNoTrans, 1.0, prob->Wmat, yvec, 0.0, zvec);  // z <- Wy
@@ -277,8 +255,8 @@ qp_eval_grad_f(Index n, Number *x, Bool new_x, Number *grad_f, UserDataPtr user_
 
   prob = (qp_minimum_distance_problem*)user_data;
   xvec = qp_new_vector(n, x);
-  yvec = gsl_vector_alloc(prob->nrow);
-  zvec = gsl_vector_alloc(prob->nrow);
+  yvec = gsl_vector_alloc(prob->bvec->size);
+  zvec = gsl_vector_alloc(prob->bvec->size);
   gsl_vector_memcpy(yvec, prob->bvec);                             // y <- b
   gsl_blas_dgemv(CblasNoTrans, 1.0, prob->Amat, xvec, -1.0, yvec); // y <- Ax - y
   gsl_blas_dgemv(CblasNoTrans, 1.0, prob->Wmat, yvec, 0.0, zvec);  // z <- Wy
@@ -286,7 +264,7 @@ qp_eval_grad_f(Index n, Number *x, Bool new_x, Number *grad_f, UserDataPtr user_
 
   // y is now equal to W^2(Ax - b)
 
-  wvec = gsl_vector_alloc(prob->nrow);
+  wvec = gsl_vector_alloc(prob->Amat->size1);
   for (j = 0; j < n; j++) {
     gsl_matrix_get_col(wvec, prob->Amat, j);  // z <- A_j
     gsl_blas_ddot(yvec, wvec, &grad_f[j]);    // grad_f[j] <- (y^t)z
@@ -388,9 +366,9 @@ qp_eval_h(Index n, Number *x, Bool new_x, Number obj_factor,
     gsl_vector *xvec, *yvec, *zvec;
 
     prob = (qp_minimum_distance_problem*)user_data;
-    xvec = gsl_vector_alloc(prob->nrow);
-    yvec = gsl_vector_alloc(prob->nrow);
-    zvec = gsl_vector_alloc(prob->nrow);
+    xvec = gsl_vector_alloc(prob->Amat->size1);
+    yvec = gsl_vector_alloc(prob->Amat->size1);
+    zvec = gsl_vector_alloc(prob->Amat->size1);
 
     k = 0;
     for (i = 0; i < n; i++) {
@@ -560,9 +538,9 @@ qp_handle_error(VALUE status_hash) {
 //
 VALUE
 qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
-  int i, j, nele_jac, nele_hess, arg_status;
+  int i, j, nrow, ncol, nconstraint, nele_jac, nele_hess, arg_status;
   enum ApplicationReturnStatus ipopt_status;
-  double *x_var;
+  double *x_var, *x_L, *x_U, *g_L, *g_U, minimum_distance;
   VALUE a_mat, b_vec, x_lower, x_upper, g_mat, g_lower, g_upper, x_init, w_vec;
   qp_minimum_distance_problem *prob;
   IpoptProblem nlp;
@@ -573,66 +551,60 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
   // Set up the problem parameters and check dimensions of arguments for consistency
 
   prob = new_qp_minimum_distance_problem();
-  x_var = NULL;
+  x_var = x_L = x_U = g_L = g_U = NULL;
   nlp = NULL;
 
-  // printf("trying a_mat... ");
   if (arg_status = qp_matrix_from_array(&prob->Amat, a_mat)) goto finalize_qp_solve_dist_full;
-  // printf("ok\n");
-  prob->nrow = prob->Amat->size1;
-  prob->ncol = prob->Amat->size2;
-  // printf("trying b_vec... ");
+  nrow = prob->Amat->size1;
+  ncol = prob->Amat->size2;
   if (arg_status = qp_vector_from_array(&prob->bvec, b_vec)) goto finalize_qp_solve_dist_full;
-  // printf("ok\n");
 
-  if (prob->Amat->size1 != prob->bvec->size) {
+  if (nrow != prob->bvec->size) {
     strncpy(qp_error_buffer, "a_mat.length != b_vec.length", QP_ERROR_BUFFER_LENGTH);
     arg_status = -1;
     goto finalize_qp_solve_dist_full;
   }
 
-  // printf("trying x_lower... ");
-  if ((arg_status = qp_ptr_from_array(&prob->x_L, x_lower)) < 0) goto finalize_qp_solve_dist_full;
-  // printf("ok\n");
+  if ((arg_status = qp_ptr_from_array(&x_L, x_lower)) < 0) goto finalize_qp_solve_dist_full;
 
   // arg_status contains x_lower.length
-  if (prob->Amat->size2 != arg_status) {
+  if (ncol != arg_status) {
     strncpy(qp_error_buffer, "a_mat[0].length != x_lower.length", QP_ERROR_BUFFER_LENGTH);
     arg_status = -1;
     goto finalize_qp_solve_dist_full;
   }
 
-  if ((arg_status = qp_ptr_from_array(&prob->x_U, x_upper)) < 0) goto finalize_qp_solve_dist_full;
+  if ((arg_status = qp_ptr_from_array(&x_U, x_upper)) < 0) goto finalize_qp_solve_dist_full;
 
   // arg_status contains x_upper.length
-  if (prob->Amat->size2 != arg_status) {
+  if (ncol != arg_status) {
     strncpy(qp_error_buffer, "a_mat[0].length != x_upper.length", QP_ERROR_BUFFER_LENGTH);
     arg_status = -1;
     goto finalize_qp_solve_dist_full;
   }
                                   
   if (arg_status = qp_matrix_from_array(&prob->Gmat, g_mat)) goto finalize_qp_solve_dist_full;
-  prob->nconstraint = prob->Gmat->size1;
+  nconstraint = prob->Gmat->size1;
 
-  if (prob->Amat->size2 != prob->Gmat->size2) {
+  if (ncol != prob->Gmat->size2) {
     strncpy(qp_error_buffer, "a_mat[0].length != g_mat[0].length", QP_ERROR_BUFFER_LENGTH);
     arg_status = -1;
     goto finalize_qp_solve_dist_full;
   }
 
-  if ((arg_status = qp_ptr_from_array(&prob->g_L, g_lower)) < 0) goto finalize_qp_solve_dist_full;
+  if ((arg_status = qp_ptr_from_array(&g_L, g_lower)) < 0) goto finalize_qp_solve_dist_full;
 
   // arg_status contains g_lower.length
-  if (prob->nconstraint != arg_status) {
+  if (nconstraint != arg_status) {
     strncpy(qp_error_buffer, "g_mat.length != g_lower.length", QP_ERROR_BUFFER_LENGTH);
     arg_status = -1;
     goto finalize_qp_solve_dist_full;
   }
 
-  if ((arg_status = qp_ptr_from_array(&prob->g_U, g_upper)) < 0) goto finalize_qp_solve_dist_full;
+  if ((arg_status = qp_ptr_from_array(&g_U, g_upper)) < 0) goto finalize_qp_solve_dist_full;
 
   // arg_status contains g_upper.length
-  if (prob->nconstraint != arg_status) {
+  if (nconstraint != arg_status) {
     strncpy(qp_error_buffer, "g_mat.length != g_upper.length", QP_ERROR_BUFFER_LENGTH);
     arg_status = -1;
     goto finalize_qp_solve_dist_full;
@@ -641,7 +613,7 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
   if ((arg_status = qp_ptr_from_array(&x_var, x_init)) < 0) goto finalize_qp_solve_dist_full;
 
   // arg_status contains x_init.length
-  if (prob->Amat->size2 != arg_status) {
+  if (ncol != arg_status) {
     strncpy(qp_error_buffer, "a_mat[0].length != x_init.length", QP_ERROR_BUFFER_LENGTH);
     arg_status = -1;
     goto finalize_qp_solve_dist_full;
@@ -650,39 +622,37 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
   if (argc > 8) {
     if (qp_diagonal_matrix_from_array(&prob->Wmat, w_vec)) goto finalize_qp_solve_dist_full;
 
-    if (prob->Amat->size1 != prob->Wmat->size1) {
+    if (nrow != prob->Wmat->size1) {
       strncpy(qp_error_buffer, "a_mat.length != w_vec.length", QP_ERROR_BUFFER_LENGTH);
       arg_status = -1;
       goto finalize_qp_solve_dist_full;
     }
   } else {
-    prob->Wmat = gsl_matrix_calloc(prob->nrow, prob->nrow);
-    for (i = 0; i < prob->nrow; i++)
+    prob->Wmat = gsl_matrix_calloc(nrow, nrow);
+    for (i = 0; i < nrow; i++)
       gsl_matrix_set(prob->Wmat, i, i, 1.0);
   }
-
-  printf("OKOKOKOK\n");
 
   // count the number of nonzero elements in the constraint Jacobian
   // (i.e., the number of nonzero elements in Gmat)
   nele_jac = 0;
-  for (i = 0; i < prob->nconstraint; i++)
-    for (j = 0; j < prob->ncol; j++)
+  for (i = 0; i < nconstraint; i++)
+    for (j = 0; j < ncol; j++)
       if (gsl_matrix_get(prob->Gmat, i, j) != 0)
         nele_jac++;
 
   // our Hessian is dense, so nele_hess is just the number of entries below the diagonal
   // (inclusive) in the Hessian.
   nele_hess = 0;
-  for (i = 1; i <= prob->ncol; i++)
+  for (i = 1; i <= ncol; i++)
     nele_hess += i;
 
-  nlp = CreateIpoptProblem(prob->ncol,
-                           prob->x_L,
-                           prob->x_U,
-                           prob->nconstraint,
-                           prob->g_L,
-                           prob->g_U,
+  nlp = CreateIpoptProblem(ncol,
+                           x_L,
+                           x_U,
+                           nconstraint,
+                           g_L,
+                           g_U,
                            nele_jac,
                            nele_hess,
                            0,
@@ -698,27 +668,30 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
   AddIpoptStrOption(nlp, "mehrotra_algorithm", "yes");
 
   // TODO capture more of the output
-  ipopt_status = IpoptSolve(nlp, x_var, NULL, NULL, NULL, NULL, NULL, prob);
+  ipopt_status = IpoptSolve(nlp, x_var, NULL, &minimum_distance, NULL, NULL, NULL, prob);
 
   qp_solution = rb_ary_new();
-  for (i = 0; i < prob->ncol; i++)
+  for (i = 0; i < ncol; i++)
     rb_ary_push(qp_solution, rb_float_new(x_var[i]));
 
   qp_status = qp_hash_from_status(ipopt_status);
   qp_result = rb_hash_new();
   rb_hash_aset(qp_result, rb_str_new2("solution"), qp_solution);
+  rb_hash_aset(qp_result, rb_str_new2("minimum_distance"), rb_float_new(minimum_distance));
   rb_hash_aset(qp_result, rb_str_new2("status"), qp_status);
 
 finalize_qp_solve_dist_full:
 
   if (nlp != NULL) FreeIpoptProblem(nlp);
   if (x_var != NULL) free(x_var);
+  if (x_L != NULL) free(x_L);
+  if (x_U != NULL) free(x_U);
+  if (g_L != NULL) free(g_L);
+  if (g_U != NULL) free(g_U);
 
   free_qp_minimum_distance_problem(prob);
 
-  printf("arg_status: %d\n", arg_status);
-
-  if (arg_status) {
+  if (arg_status < 0) {
     rb_raise(rb_eArgError, qp_error_buffer);
   }
 
