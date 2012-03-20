@@ -513,26 +513,20 @@ qp_handle_error(VALUE status_hash) {
 
 // RUBY METHODS
 
-// TODO update comment
 // :call-seq:
-//   RubyQp::solve_dist_full(m_mat, m_vec, a_mat, b_vec, c_mat, d_vec, w_vec = nil) => hash
+//   RubyQp::solve_dist_full(a_mat, b_vec, x_lower, x_upper, g_mat, g_lower, g_upper, x_init, w_vec = nil) => hash
 //
 //   ||Ax - b||
-//   x_L <= x <= x_U
-//   g_L <= g(x) <= g_U
+//   x_lower <= x <= x_upper
+//   g_lower <= Gx <= g_upper
 //
-// Find x which minimizes the expression
-//   ||Mx - m||
-// subject to the constraints
-//   Ax = b 
-//   Cx >= d,
-// where +M+ is the matrix specified by _m_mat_, +m+ is the vector specified by _m_vec_, 
-// and so forth for +A+, +b+, +C+, and +d+. _m_mat_ (and all matrix arguments) should be 
+// where +A+ is the matrix specified by _a_mat_, +b+ is the vector specified by _b_vec_, 
+// and so forth. _a_mat_ (and all matrix arguments) should be 
 // an Array of Arrays. Sub-Arrays should all have the same length, and their entries must 
 // be Numeric. _m_vec_ (and all vector arguments) should be an Array of Numerics. 
 //
-// The constraint +Cx = d+ means that each entry in the vector +Cx+ is greater than or
-// equal to the corresponding entry in the vector +d+.
+// The inequality constraints apply coordinate-wise. To add an equality constraint, set the
+// corresponding values in x_lower and x_upper (or in g_lower and g_upper) to the same value.
 //
 // The norm +||.||+ is a weighted vector norm with weights given by a vector +w+ (an 
 // optional argument specified by _w_vec_). A larger number in the ith entry of _w_vec_
@@ -544,12 +538,11 @@ qp_handle_error(VALUE status_hash) {
 // that distances in the ith coordinate are multiplied by w_i (instead of the square root
 // of w_i).
 //
-// The underlying algorithm requires that there be at least one equality constraint and
-// at least one inequality constraint. That is, +A+ and +C+ must have at least one row
-// and +b+ and +d+ must have at least one entry.
+// _xinit_ is the initial point for the optimization algorithm.
 //
 // Returns a ruby Hash with the following keys and values set:
 //   "solution"      => minimizing solution
+//   "status"        => Ipopt status code and message
 //
 VALUE
 qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
