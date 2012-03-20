@@ -3,94 +3,17 @@
 #include <gsl/gsl_vector.h>
 #include <gsl/gsl_matrix.h>
 #include <gsl/gsl_blas.h>
-#include <gsl/gsl_errno.h>
 
-#define QP_ERROR_MESSAGE_BUFFER_LEN 200
+// If the following line is uncommented, then RubyQp may raise a ruby exception depending
+// on the IpoptSolve return status. Otherwise, the return status is passed through in the
+// result hash.
+// #define QP_RAISE_ON_ERROR 1
 
 #define QP_MATRIX_ENTRY(VALUE,i,j) rb_ary_entry(rb_ary_entry(VALUE,i),j)
 #define QP_MATRIX_NROW RARRAY_LEN
 #define QP_MATRIX_NCOL(VALUE) RARRAY_LEN(rb_ary_entry(VALUE,0))
 
 VALUE RubyQp = Qnil;
-
-// ERROR HANDLING
-
-char qp_error_message[QP_ERROR_MESSAGE_BUFFER_LEN];
-
-// Copy error state to the error message.
-//
-void
-qp_gsl_error_handler(const char *reason, const char *file, int line, int gsl_errno) {
-  snprintf(qp_error_message, QP_ERROR_MESSAGE_BUFFER_LEN, 
-           "[GSL error (%d) in %s:%d] %s", gsl_errno, file, line, reason);
-}
-
-// Return a ruby exception class appropriate to the GSL error code. 
-//
-VALUE
-qp_error_class_for(int status) {
-  VALUE error_class;
-
-  switch(status) {
-    case GSL_EBADLEN:
-    case GSL_EDOM:
-    case GSL_EINVAL:
-      error_class = rb_eArgError;
-      break;
-    case GSL_ERANGE:
-    case GSL_EUNDRFLW:
-    case GSL_EOVRFLW:
-      error_class = rb_eRangeError;
-      break;
-    case GSL_ENOMEM:
-      error_class = rb_eNoMemError;
-      break;
-    case GSL_EZERODIV:
-      error_class = rb_eZeroDivError;
-      break;
-    default:
-      error_class = rb_eStandardError;
-  }
-
-  return error_class;
-}
-
-// Raise a ruby exception in case in case of a nonzero status.
-//
-void
-qp_error_handler(int status) {
-  if (status == GSL_CONTINUE) {
-    rb_raise(rb_eException, "Maximum iterations reached, check problem constraints for consistency.");
-  } else if (status < 0) {
-    rb_raise(qp_error_class_for(status), gsl_strerror(status));
-  } else if (status > 0) {
-    // GSL error handler was invoked
-    rb_raise(qp_error_class_for(status), qp_error_message);
-  }
-}
-
-// Raise a ruby Exception if ary can't be interpreted as a GSL vector.
-// 
-void
-qp_ensure_vector(const VALUE ary) {
-  int i, len;
-
-  // A vector argument must be a ruby Array
-  Check_Type(ary, T_ARRAY);
-
-  // A vector must have at least one element
-  len = RARRAY_LEN(ary);
-  if (len == 0) {
-    rb_raise(rb_eArgError, "Vectors must have at least one element.");
-  }
-
-  // All entries in the Array must be Floats or Fixnums
-  for (i = 0; i < len; i++) {
-    if (rb_obj_is_kind_of(rb_ary_entry(ary, i), rb_cNumeric) == Qfalse) {
-      rb_raise(rb_eArgError, "Vector entries must be Numeric.");
-    }
-  }
-}
 
 // TYPES
 
@@ -161,7 +84,7 @@ free_qp_minimum_distance_problem(qp_minimum_distance_problem* prob) {
 
 // Copy memory into a (newly allocated) GSL vector
 gsl_vector*
-qp_new_vector(int n, double *x) {
+qp_new_vector(int n, const double *x) {
   int i;
   gsl_vector *xvec;
 
@@ -170,6 +93,29 @@ qp_new_vector(int n, double *x) {
     gsl_vector_set(xvec, i, x[i]);
 
   return xvec;
+}
+
+// Raise a ruby Exception if ary can't be interpreted as a GSL vector.
+// 
+void
+qp_ensure_vector(const VALUE ary) {
+  int i, len;
+
+  // A vector argument must be a ruby Array
+  Check_Type(ary, T_ARRAY);
+
+  // A vector must have at least one element
+  len = RARRAY_LEN(ary);
+  if (len == 0) {
+    rb_raise(rb_eArgError, "Vectors must have at least one element.");
+  }
+
+  // All entries in the Array must be Floats or Fixnums
+  for (i = 0; i < len; i++) {
+    if (rb_obj_is_kind_of(rb_ary_entry(ary, i), rb_cNumeric) == Qfalse) {
+      rb_raise(rb_eArgError, "Vector entries must be Numeric.");
+    }
+  }
 }
 
 // Raise a ruby Exception if ary can't be interpreted as a GSL matrix.
@@ -365,7 +311,7 @@ qp_eval_g(Index n, Number *x, Bool new_x, Index m, Number *g, UserDataPtr user_d
 // problem struct.
 Bool
 qp_eval_jac_g(Index n, Number *x, Bool new_x, Index m, 
-                Index nele_jac, Index *iRow, Index *jCol, Number *values, UserDataPtr user_data) 
+              Index nele_jac, Index *iRow, Index *jCol, Number *values, UserDataPtr user_data) 
 {
   // Our Jacobian is just prob->Gmat
   int i, j, k;
@@ -454,6 +400,117 @@ qp_eval_h(Index n, Number *x, Bool new_x, Number obj_factor,
   return TRUE;
 }
 
+VALUE
+qp_hash_from_status(enum ApplicationReturnStatus status_code) {
+  VALUE hash, status, error_class, message;
+
+  error_class = Qnil;
+
+  switch (status_code) {
+    case Solve_Succeeded:
+      status = rb_str_new2("Solve_Succeeded");
+      message = rb_str_new2("EXIT: Optimal Solution Found.");
+      break;
+    case Solved_To_Acceptable_Level:
+      status = rb_str_new2("Solved_To_Acceptable_Level");
+      message = rb_str_new2("EXIT: Solved To Acceptable Level.");
+      break;
+    case Feasible_Point_Found:
+      status = rb_str_new2("Feasible_Point_Found");
+      message = rb_str_new2("EXIT: Feasible point for square problem found.");
+      break;
+    case Infeasible_Problem_Detected:
+      status = rb_str_new2("Infeasible_Problem_Detected");
+      message = rb_str_new2("EXIT: Feasible point for square problem found.");
+      error_class = rb_const_get(RubyQp, rb_intern("InfeasibleProblemDetectedError"));
+      break;
+    case Search_Direction_Becomes_Too_Small:
+      status = rb_str_new2("Search_Direction_Becomes_Too_Small");
+      message = rb_str_new2("EXIT: Search Direction is becoming Too Small.");
+      error_class = rb_const_get(RubyQp, rb_intern("SearchDirectionBecomesTooSmallError"));
+      break;
+    case Diverging_Iterates:
+      status = rb_str_new2("Diverging_Iterates");
+      message = rb_str_new2("EXIT: Iterates diverging; problem might be unbounded.");
+      error_class = rb_const_get(RubyQp, rb_intern("DivergingIteratesError"));
+      break;
+    case User_Requested_Stop:
+      status = rb_str_new2("User_Requested_Stop");
+      message = rb_str_new2("EXIT: Sopping optimization at current point as requested by user.");
+      break;
+    case Maximum_Iterations_Exceeded:
+      status = rb_str_new2("Maximum_Iterations_Exceeded");
+      message = rb_str_new2("EXIT: Maximum Number of Iterations Exceeded.");
+      error_class = rb_const_get(RubyQp, rb_intern("MaximumIterationsExceededError"));
+      break;
+    case Restoration_Failed:
+      status = rb_str_new2("Restoration_Failed");
+      message = rb_str_new2("EXIT: Restoration Failed!");
+      error_class = rb_const_get(RubyQp, rb_intern("RestorationFailedError"));
+      break;
+    case Error_In_Step_Computation:
+      status = rb_str_new2("Error_In_Step_Computation");
+      message = rb_str_new2("EXIT: Error in step computation (regularization becomes to large?)!");
+      error_class = rb_const_get(RubyQp, rb_intern("ErrorInStepComputationError"));
+      break;
+    case Invalid_Option:
+      status = rb_str_new2("Invalid_Option");
+      message = rb_str_new2("");
+      error_class = rb_const_get(RubyQp, rb_intern("InvalidOptionError"));
+      break;
+    case Not_Enough_Degrees_Of_Freedom:
+      status = rb_str_new2("Not_Enough_Degrees_Of_Freedom");
+      message = rb_str_new2("EXIT: Problem has too few degrees of freedom.");
+      error_class = rb_const_get(RubyQp, rb_intern("NotEnoughDegreesOfFreedomError"));
+      break;
+    case Invalid_Problem_Definition:
+      status = rb_str_new2("Invalid_Problem_Definition");
+      message = rb_str_new2("");
+      error_class = rb_const_get(RubyQp, rb_intern("InvalidProblemDefinitionError"));
+      break;
+    case Unrecoverable_Exception:
+      status = rb_str_new2("Unrecoverable_Exception");
+      message = rb_str_new2("");
+      error_class = rb_const_get(RubyQp, rb_intern("UnrecoverableExceptionError"));
+      break;
+    case NonIpopt_Exception_Thrown:
+      status = rb_str_new2("NonIpopt_Exception_Thrown");
+      message = rb_str_new2("Unknown Exception caught in Ipopt");
+      error_class = rb_const_get(RubyQp, rb_intern("NonIpoptExceptionThrownError"));
+      break;
+    case Insufficient_Memory:
+      status = rb_str_new2("Insufficient_Memory");
+      message = rb_str_new2("EXIT: Not enough memory.");
+      error_class = rb_eNoMemError;
+      break;
+    case Internal_Error:
+      status = rb_str_new2("Internal_Error");
+      message = rb_str_new2("EXIT: INTERNAL ERROR: Unknown SolverReturn value - Notify IPOPT Authors.");
+      error_class = rb_const_get(RubyQp, rb_intern("InternalError"));
+      break;
+  }
+
+  hash = rb_hash_new();
+  rb_hash_aset(hash, rb_str_new2("status"), status);
+  rb_hash_aset(hash, rb_str_new2("message"), message);
+
+  if (error_class != Qnil) {
+    rb_hash_aset(hash, rb_str_new2("error"), error_class);
+  }
+
+  return hash;
+}
+
+// Raise an exception corresponding to the Ipopt status code
+void
+qp_handle_error(VALUE status_hash) {
+  VALUE error_class = rb_hash_aref(status_hash, rb_str_new2("error"));
+
+  if (error_class != Qnil) {
+    rb_raise(error_class, StrinvValueCStr(rb_hash_aref(status_hash, rb_str_new2("message"))));
+  }
+}
+
 // RUBY METHODS
 
 // TODO update comment
@@ -496,14 +553,15 @@ qp_eval_h(Index n, Number *x, Bool new_x, Number obj_factor,
 //
 VALUE
 qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
-  int i, j, nele_jac, nele_hess, status;
+  int i, j, nele_jac, nele_hess;
+  enum ApplicationReturnStatus status;
   double *x;
   VALUE a_mat, b_vec, x_lower, x_upper, g_mat, g_lower, g_upper, x_init, w_vec;
   gsl_matrix *matrix;
   gsl_vector *vector;
   qp_minimum_distance_problem *prob;
   IpoptProblem nlp;
-  VALUE qp_solution, qp_result;
+  VALUE qp_solution, qp_status, qp_result;
 
   rb_scan_args(argc, argv, "81", &a_mat, &b_vec, &x_lower, &x_upper, &g_mat, &g_lower, &g_upper, &x_init, &w_vec);
 
@@ -619,9 +677,10 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
                            &qp_eval_jac_g,
                            &qp_eval_h);
 
-  // TODO these options should be set globally via an options file
+  // TODO these options should be set globally in a ruby-accessible manner
   AddIpoptIntOption(nlp, "print_level", 0);
   AddIpoptIntOption(nlp, "max_iter", 200);
+  AddIpoptStrOption(nlp, "mehrotra_algorithm", "yes");
 
   // TODO capture more of the output
   status = IpoptSolve(nlp, x, NULL, NULL, NULL, NULL, NULL, prob);
@@ -630,8 +689,10 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
   for (i = 0; i < prob->ncol; i++)
     rb_ary_push(qp_solution, rb_float_new(x[i]));
 
+  qp_status = qp_hash_from_status(status);
   qp_result = rb_hash_new();
   rb_hash_aset(qp_result, rb_str_new2("solution"), qp_solution);
+  rb_hash_aset(qp_result, rb_str_new2("status"), qp_status);
 
   FreeIpoptProblem(nlp);
   free(x);
@@ -639,7 +700,10 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
 
   // memory referenced by matrix and vector will be freed by free_qp_minimum_distance_problem
 
-  // qp_error_handler(status);
+#ifdef QP_RAISE_ON_ERROR
+  qp_handle_error(qp_status);
+#endif
+
   return qp_result;
 }
 
@@ -654,10 +718,10 @@ qp_solve_dist(int argc, VALUE *argv, VALUE self) {
   return rb_hash_aref(qp_result, rb_str_new2("solution"));
 }
 
-void Init_ruby_qp(void) {
+void 
+Init_ruby_qp(void) {
   RubyQp = rb_define_module("RubyQp");
+  rb_require("ruby_qp/errors");
   rb_define_module_function(RubyQp, "solve_dist_full", qp_solve_dist_full, -1);
   rb_define_module_function(RubyQp, "solve_dist", qp_solve_dist, -1);
-
-  gsl_set_error_handler(&qp_gsl_error_handler);
 }
