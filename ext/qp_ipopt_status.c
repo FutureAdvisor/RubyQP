@@ -109,6 +109,8 @@ void
 qp_handle_ipopt_status_hash(VALUE ipopt_status_hash) {
     VALUE error_class, message;
 
+    error_class = message = Qnil;
+
     error_class = rb_hash_aref(ipopt_status_hash, QP_IPOPT_STATUS_HASH_ERROR_CLASS);
     if (!NIL_P(error_class)) {
         message = rb_hash_aref(ipopt_status_hash, QP_IPOPT_STATUS_HASH_MESSAGE);

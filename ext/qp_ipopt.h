@@ -46,7 +46,11 @@ qp_eval_h(Index n, Number *x, Bool new_x, Number obj_factor,
     nlp = CreateIpoptProblem(n, x_L, x_U, m, g_L, g_U, nele_jac, nele_hess, index_style, &qp_eval_f, &qp_eval_g, &qp_eval_grad_f, &qp_eval_jac_g, &qp_eval_h);  \
     QP_CLEANUP_ON_NULL(nlp);
 
-#define QP_IPOPT_PROBLEM_FREE(nlp) if (NULL != nlp) FreeIpoptProblem(nlp);
+#define QP_IPOPT_PROBLEM_FREE(nlp)  \
+    if (NULL != nlp) {              \
+        FreeIpoptProblem(nlp);      \
+        nlp = NULL;                 \
+    }
 
 //
 // ERROR HANDLING

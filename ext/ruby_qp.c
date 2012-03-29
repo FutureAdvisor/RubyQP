@@ -49,9 +49,12 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
     rb_scan_args(argc, argv, "81", &a_mat, &b_vec, &x_lower, &x_upper, &g_mat, &g_lower, &g_upper, &x_init, &w_vec);
     ipopt_status_hash = solution = result = Qnil;
     prob = NULL;
+    nrowa = ncola = nb = nx_lower = nx_upper = nrowg = ncolg = ng_lower = ng_upper = nx_init = nw = i = j = 0;
     nvar = nconstraint = nele_jac = nele_hess = 0;
     x_L = x_U = g_L = g_U = x_var = NULL;
+    minimum_distance = 0;
     nlp = NULL;
+    ipopt_status = Solve_Succeeded;
 
     // Set up the problem parameters and check dimensions of arguments for consistency.
     QP_MININUM_DISTANCE_PROBLEM_ALLOC(prob);

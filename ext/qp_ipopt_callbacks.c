@@ -84,6 +84,7 @@ qp_eval_g(Index n, Number *x, Bool new_x,
     qp_minimum_distance_problem *prob;
     gsl_vector *xvec, *yvec;
 
+    i = 0;
     prob = (qp_minimum_distance_problem *) user_data;
     xvec = yvec = NULL;
 
@@ -117,12 +118,13 @@ qp_eval_jac_g(Index n, Number *x, Bool new_x,
     Number d;
     qp_minimum_distance_problem *prob;
 
+    i = j = k = 0;
+    d = 0;
     prob = (qp_minimum_distance_problem *) user_data;
 
     if (NULL == values) {
         // return the structure of the Jacobian:
         // record the indices of nonzero entries in prob->Gmat
-        k = 0;
         for (i = 0; i < m; i++) {
             for (j = 0; j < n; j++) {
                 if (gsl_matrix_get(prob->Gmat, i, j) != 0) {
@@ -135,7 +137,6 @@ qp_eval_jac_g(Index n, Number *x, Bool new_x,
     } else {
         // return the values of the Jacobian of the constraints:
         // record the values of nonzero entries in prob->Gmat
-        k = 0;
         for (i = 0; i < m; i++) {
             for (j = 0; j < n; j++) {
                 d = gsl_matrix_get(prob->Gmat, i, j);
@@ -159,6 +160,7 @@ qp_eval_h(Index n, Number *x, Bool new_x, Number obj_factor,
     qp_minimum_distance_problem *prob;
     gsl_vector *xvec, *yvec, *zvec;
 
+    i = j = k = 0;
     prob = (qp_minimum_distance_problem *) user_data;
     xvec = yvec = zvec = NULL;
 
@@ -168,7 +170,6 @@ qp_eval_h(Index n, Number *x, Bool new_x, Number obj_factor,
 
     if (NULL == values) {
         // This is a symmetric matrix, fill the lower left triangle only.
-        k = 0;
         for (i = 0; i < n; i++) {
             for (j = 0; j <= i; j++) {
                 iRow[k] = i;
@@ -181,7 +182,6 @@ qp_eval_h(Index n, Number *x, Bool new_x, Number obj_factor,
         QP_GSL_VECTOR_ALLOC(yvec, prob->Amat->size1);
         QP_GSL_VECTOR_ALLOC(zvec, prob->Amat->size1);
 
-        k = 0;
         for (i = 0; i < n; i++) {
             for (j = 0; j <= i; j++) {
                 gsl_matrix_get_col(xvec, prob->Amat, i);                        // x <- A_i

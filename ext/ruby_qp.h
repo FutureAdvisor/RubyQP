@@ -43,7 +43,11 @@ typedef int QP_STATUS;
     QP_CLEANUP_ON_NULL(x);                  \
     memset(x, 0, sizeof(type) * n);
 
-#define QP_FREE(x) if (NULL != x) free(x);
+#define QP_FREE(x)      \
+    if (NULL != x) {    \
+        free(x);        \
+        x = NULL;       \
+    }
 
 // Ruby symbols used to access values in the Ruby hash representing the solver's result.
 #define QP_RESULT_SOLUTION          ID2SYM(rb_intern("solution"))

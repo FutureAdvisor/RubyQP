@@ -23,7 +23,16 @@
     matrix = gsl_matrix_calloc(nrow, ncol);         \
     QP_CLEANUP_ON_NULL(matrix);
 
-#define QP_GSL_VECTOR_FREE(vector)  if (NULL != vector) gsl_vector_free(vector);
-#define QP_GSL_MATRIX_FREE(matrix)  if (NULL != matrix) gsl_matrix_free(matrix);
+#define QP_GSL_VECTOR_FREE(vector)  \
+    if (NULL != vector) {           \
+        gsl_vector_free(vector);    \
+        vector = NULL;              \
+    }
+
+#define QP_GSL_MATRIX_FREE(matrix)  \
+    if (NULL != matrix) {           \
+        gsl_matrix_free(matrix);    \
+        matrix = NULL;              \
+    }
 
 #endif  // #ifndef QP_GSL_H

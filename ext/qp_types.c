@@ -16,6 +16,8 @@ qp_gsl_vector_set_numbers(
     QP_STATUS_INIT;
     size_t i;
 
+    i = 0;
+
     for (i = 0; i < n; i++) {
         gsl_vector_set(vector, i, numbers[i]);
     }
@@ -34,6 +36,8 @@ qp_rarray_vector_len(
 {
     QP_STATUS_INIT;
     long n;
+
+    n = 0;
 
     QP_CHECK(rb_obj_is_kind_of(rarray, rb_cArray) == Qtrue, "Vector must be an Array.");
 
@@ -58,6 +62,9 @@ qp_rarray_matrix_size(
     QP_STATUS_INIT;
     long nrow, ncol, i;
     VALUE row;
+
+    nrow = ncol = i = 0;
+    row = Qnil;
 
     QP_CHECK(rb_obj_is_kind_of(rarray, rb_cArray) == Qtrue, "Matrix must be an Array.");
 
@@ -90,6 +97,9 @@ qp_gsl_vector_from_rarray(
     long i;
     VALUE entry;
 
+    i = 0;
+    entry = Qnil;
+
     for (i = 0; i < n; i++) {
         entry = rb_ary_entry(rarray, i);
         QP_CHECK(rb_obj_is_kind_of(entry, rb_cNumeric) == Qtrue, "Vector entry must be a Numeric.");
@@ -112,6 +122,9 @@ qp_numbers_from_rarray(
     QP_STATUS_INIT;
     long i;
     VALUE entry;
+
+    i = 0;
+    entry = Qnil;
 
     for (i = 0; i < n; i++) {
         entry = rb_ary_entry(rarray, i);
@@ -136,6 +149,9 @@ qp_gsl_matrix_from_rarray(
     QP_STATUS_INIT;
     long i, j;
     VALUE row, entry;
+
+    i = j = 0;
+    row = entry = Qnil;
 
     for (i = 0; i < nrow; i++) {
         row = rb_ary_entry(rarray, i);
@@ -166,6 +182,9 @@ qp_gsl_matrix_set_diagonal(
     long i;
     VALUE entry;
 
+    i = 0;
+    entry = Qnil;
+
     for (i = 0; i < n; i++) {
         entry = rb_ary_entry(rarray, i);
         QP_CHECK(rb_obj_is_kind_of(entry, rb_cNumeric) == Qtrue, "Vector entry must be a Numeric.");
@@ -187,6 +206,9 @@ qp_rarray_from_gsl_vector(
     QP_STATUS_INIT;
     long n, i;
     VALUE rarray;
+
+    n = i = 0;
+    rarray = Qnil;
 
     QP_CHECK(vector->size <= LONG_MAX, "Vector has too many elements.");
     n = (long) vector->size;
@@ -213,6 +235,9 @@ qp_rarray_from_gsl_matrix(
     QP_STATUS_INIT;
     long nrow, ncol, i, j;
     VALUE rarray, row;
+
+    nrow = ncol = i = j = 0;
+    rarray = row = Qnil;
 
     QP_CHECK(matrix->size1 <= LONG_MAX, "Matrix has too many rows.");
     nrow = (long) matrix->size1;
