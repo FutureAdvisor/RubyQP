@@ -32,8 +32,9 @@ char qp_error_buffer[QP_ERROR_BUFFER_LENGTH + 1];
 // _x_init_ is the initial point for the optimization algorithm.
 //
 // Returns a Ruby Hash with the following keys and values set:
-//   :solution  => minimizing solution
-//   :status    => Ipopt status code and message
+//   :solution          => minimizing solution
+//   :minimum_distance  => the value of the distance function at the minimizing solution
+//   :status            => Ipopt status code and message
 //
 VALUE
 qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
