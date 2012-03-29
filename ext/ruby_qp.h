@@ -34,18 +34,18 @@ typedef int QP_STATUS;
     }
 
 #define QP_MALLOC(x, type)              \
-    x = (type *) malloc(sizeof(type));  \
+    x = (type *) xmalloc(sizeof(type)); \
     QP_CLEANUP_ON_NULL(x);              \
     memset(x, 0, sizeof(type));
 
 #define QP_MALLOC_N(x, type, n)             \
-    x = (type *) malloc(sizeof(type) * n);  \
+    x = (type *) xmalloc(sizeof(type) * n); \
     QP_CLEANUP_ON_NULL(x);                  \
     memset(x, 0, sizeof(type) * n);
 
 #define QP_FREE(x)      \
     if (NULL != x) {    \
-        free(x);        \
+        xfree(x);       \
         x = NULL;       \
     }
 
