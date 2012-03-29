@@ -63,10 +63,12 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
     QP_CHECK(ncola <= QP_IPOPT_INDEX_MAX, "Too many optimization variables.");
     nvar = (Index) ncola;
     QP_GSL_MATRIX_ALLOC(prob->Amat, nrowa, ncola);
+    QP_CLEANUP_WITH_STATUS_ON_FAIL(qp_gsl_matrix_from_rarray(prob->Amat, a_mat, nrowa, ncola));
 
     QP_CLEANUP_WITH_STATUS_ON_FAIL(qp_rarray_vector_len(&nb, b_vec));
     QP_CHECK(nrowa == nb, "a_mat.length != b_vec.length")
     QP_GSL_VECTOR_ALLOC(prob->bvec, nb);
+    QP_CLEANUP_WITH_STATUS_ON_FAIL(qp_gsl_vector_from_rarray(prob->bvec, b_vec, nb));
 
     QP_CLEANUP_WITH_STATUS_ON_FAIL(qp_rarray_vector_len(&nx_lower, x_lower));
     QP_CHECK(ncola == nx_lower, "a_mat[0].length != x_lower.length");
@@ -84,6 +86,7 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
     QP_CHECK(ncolg <= QP_IPOPT_INDEX_MAX / nrowg, "Too many elements in g_mat.");  // nele_jac can potentially overflow later if this condition is not satisfied.
     nconstraint = (Index) nrowg;
     QP_GSL_MATRIX_ALLOC(prob->Gmat, nrowg, ncolg);
+    QP_CLEANUP_WITH_STATUS_ON_FAIL(qp_gsl_matrix_from_rarray(prob->Gmat, g_mat, nrowg, ncolg));
 
     QP_CLEANUP_WITH_STATUS_ON_FAIL(qp_rarray_vector_len(&ng_lower, g_lower));
     QP_CHECK(nrowg == ng_lower, "g_mat.length != g_lower.length");
