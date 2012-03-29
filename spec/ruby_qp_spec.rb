@@ -37,7 +37,7 @@ describe RubyQp do
 
     it 'solves quadratic programming problems' do
       h = RubyQp::solve_dist_full @a_mat, @b_vec, @x_lower, @x_upper, @g_mat, @g_lower, @g_upper, @x_init
-      x_vec = h["solution"]
+      x_vec = h[:solution]
       x_vec.each_index do |ix|
         x_vec[ix].should be_close(@x_vec[ix], 1e-7)
       end

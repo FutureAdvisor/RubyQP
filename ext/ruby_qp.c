@@ -126,8 +126,9 @@ qp_solve_dist_full(int argc, VALUE *argv, VALUE self) {
     }
 
     // Our Hessian is dense, so nele_hess is just the number of entries below the diagonal
-    // (inclusive) in the Hessian.
-    for (j = 0; j < ncolg; j++) {
+    // (inclusive) in the Hessian. The Hessian is a square matrix with dimension equal to
+    // the number of optimization variables (i.e., the number of columns in A)
+    for (j = 1; j <= ncola; j++) {
         nele_hess += j;
     }
 

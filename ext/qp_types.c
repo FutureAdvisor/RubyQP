@@ -158,7 +158,7 @@ qp_gsl_matrix_from_rarray(
         QP_CHECK(rb_obj_is_kind_of(row, rb_cArray) == Qtrue, "Matrix row must be an Array.");
         QP_CHECK(RARRAY_LEN(row) == ncol, "Matrix has rows of different lengths.");
 
-        for (j = 0; j < nrow; j++) {
+        for (j = 0; j < ncol; j++) {
             entry = rb_ary_entry(row, j);
             QP_CHECK(rb_obj_is_kind_of(entry, rb_cNumeric) == Qtrue, "Matrix entry must be a Numeric.");
             gsl_matrix_set(matrix, i, j, NUM2DBL(entry));
